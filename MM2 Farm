@@ -25,31 +25,29 @@ local Settings = {
 
 local SessionStart = tick()
 local LastBagCheck = 0
-local LastCandyCheck = 0
 local LastESPUpdate = 0
 local LastTargetRefresh = 0
 local LastServerHopCheck = 0
 local LastTPTime = 0
 local LastPos = Vector3.zero
 local LastPosTime = 0
+local LastChar = nil
+local CharChangedAt = 0
 
 local CurrentTarget = nil
-local TargetAcquiredAt = 0
 local WalkPath = nil
 local WalkIndex = 1
 
 local LocalBagCoins = 0
 local LocalTotalCoins = 0
 local LocalCandyCoins = 0
-local CollectedCoinIds = {}
-local CollectedCandyIds = {}
 
 local HasActivatedFullBagAction = false
 local FullBagActionTime = 0
 local HasShotMurder = false
 local HasKilledAll = false
 
-local ESPBillboards = {}
+local ESPData = {}
 
 local function SaveConfig()
     pcall(function()
@@ -123,6 +121,22 @@ local function IsCoin(Obj)
         and Obj.Transparency < 1
 end
 
+local function IsPlaying()
+    local Char = GetCharacter()
+    if not Char then return false end
+    if Char ~= LastChar then
+        LastChar = Char
+        CharChangedAt = tick()
+        return false
+    end
+    if tick() - CharChangedAt < 2 then return false end
+    local Hum = GetHumanoid()
+    if not Hum then return false end
+    if Hum.Health <= 0 or Hum.MaxHealth <= 0 then return false end
+    if not Char:FindFirstChild("HumanoidRootPart") then return false end
+    return true
+end
+
 local function GetNearestTarget(Position)
     local Best, BestDist = nil, math.huge
     for _, Obj in ipairs(workspace:GetDescendants()) do
@@ -144,9 +158,7 @@ local function GetBagCoins()
     local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui")
     if PlayerGui then
         for _, Obj in ipairs(PlayerGui:GetDescendants()) do
-            if Obj:IsA("IntValue") and Obj.Name:lower():find("coin") then
-                return Obj.Value
-            end
+            if Obj:IsA("IntValue") and Obj.Name:lower():find("coin") then return Obj.Value end
             if Obj:IsA("TextLabel") and (Obj.Name:lower():find("coin") or Obj.Name:lower():find("bag")) then
                 local Num = tonumber(Obj.Text:match("%d+"))
                 if Num then return Num end
@@ -220,9 +232,7 @@ local function GetMyTool(Keyword)
     local Char = GetCharacter()
     if not Char then return nil end
     for _, Tool in ipairs(Char:GetChildren()) do
-        if Tool:IsA("Tool") and Tool.Name:lower():find(Keyword) then
-            return Tool
-        end
+        if Tool:IsA("Tool") and Tool.Name:lower():find(Keyword) then return Tool end
     end
     return nil
 end
@@ -303,37 +313,106 @@ local function SetNoclip(Enabled)
     end
 end
 
-local function ClearESP()
-    for _, Billboard in ipairs(ESPBillboards) do
-        if Billboard then Billboard:Destroy() end
-    end
-    ESPBillboards = {}
+local function CreateESPForCoin(Coin)
+    local Highlight = Instance.new("Highlight")
+    Highlight.FillColor = Color3.fromRGB(0, 220, 255)
+    Highlight.FillTransparency = 0.75
+    Highlight.OutlineColor = Color3.fromRGB(0, 255, 200)
+    Highlight.OutlineTransparency = 0
+    Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    Highlight.Adornee = Coin
+    Highlight.Enabled = false
+    Highlight.Parent = Coin
+
+    local Billboard = Instance.new("BillboardGui")
+    Billboard.Size = UDim2.new(0, 130, 0, 26)
+    Billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    Billboard.AlwaysOnTop = true
+    Billboard.MaxDistance = 600
+    Billboard.Enabled = false
+    Billboard.Parent = Coin
+
+    local Background = Instance.new("Frame")
+    Background.Size = UDim2.new(1, 0, 1, 0)
+    Background.BackgroundColor3 = Color3.fromRGB(12, 14, 22)
+    Background.BackgroundTransparency = 0.25
+    Background.BorderSizePixel = 0
+    Background.Parent = Billboard
+    local Corner = Instance.new("UICorner")
+    Corner.CornerRadius = UDim.new(0, 7)
+    Corner.Parent = Background
+    local BStroke = Instance.new("UIStroke")
+    BStroke.Color = Color3.fromRGB(0, 255, 200)
+    BStroke.Thickness = 1
+    BStroke.Transparency = 0.35
+    BStroke.Parent = Background
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -8, 1, 0)
+    Label.Position = UDim2.new(0, 4, 0, 0)
+    Label.BackgroundTransparency = 1
+    Label.TextColor3 = Color3.fromRGB(0, 255, 200)
+    Label.Font = Enum.Font.GothamBold
+    Label.TextSize = 11
+    Label.TextStrokeTransparency = 0.4
+    Label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    Label.TextXAlignment = Enum.TextXAlignment.Center
+    Label.Text = "Coin"
+    Label.Parent = Background
+
+    return {Highlight = Highlight, Billboard = Billboard, Label = Label}
 end
 
-local function BuildESP()
-    ClearESP()
-    if not Settings.ESP then return end
-    local MyHRP = GetHRP()
-    if not MyHRP then return end
-    for _, Obj in ipairs(workspace:GetDescendants()) do
-        if IsCoin(Obj) and Obj.Parent then
-            local Billboard = Instance.new("BillboardGui")
-            Billboard.Size = UDim2.new(0, 200, 0, 40)
-            Billboard.StudsOffset = Vector3.new(0, 3, 0)
-            Billboard.AlwaysOnTop = true
-            Billboard.MaxDistance = 1000
-            Billboard.Parent = Obj
-            local Label = Instance.new("TextLabel")
-            Label.Size = UDim2.new(1, 0, 1, 0)
-            Label.BackgroundTransparency = 1
-            Label.TextColor3 = Color3.fromRGB(0, 255, 180)
-            Label.Font = Enum.Font.GothamBold
-            Label.TextSize = 13
-            Label.TextStrokeTransparency = 0
-            Label.TextStrokeColor3 = Color3.new(0, 0, 0)
-            Label.Text = string.format("%s | %.0f", Obj.Name, (Obj.Position - MyHRP.Position).Magnitude)
-            Label.Parent = Billboard
-            table.insert(ESPBillboards, Billboard)
+local function ClearAllESP()
+    for Coin, Data in pairs(ESPData) do
+        if Data.Highlight then Data.Highlight:Destroy() end
+        if Data.Billboard then Data.Billboard:Destroy() end
+    end
+    ESPData = {}
+end
+
+local function UpdateESP()
+    if not Settings.ESP then
+        ClearAllESP()
+        return
+    end
+
+    local HRP = GetHRP()
+    if not HRP then return end
+    local CamPos = Camera.CFrame.Position
+    local MyChar = GetCharacter()
+
+    for Coin, Data in pairs(ESPData) do
+        if not Coin or not Coin.Parent or not IsCoin(Coin) then
+            if Data.Highlight then Data.Highlight:Destroy() end
+            if Data.Billboard then Data.Billboard:Destroy() end
+            ESPData[Coin] = nil
+        end
+    end
+
+    for _, Coin in ipairs(workspace:GetDescendants()) do
+        if IsCoin(Coin) and Coin.Parent then
+            if not ESPData[Coin] then
+                ESPData[Coin] = CreateESPForCoin(Coin)
+            end
+            local Data = ESPData[Coin]
+            if Data then
+                local Direction = Coin.Position - CamPos
+                local Distance = Direction.Magnitude
+                local Params = RaycastParams.new()
+                Params.FilterDescendantsInstances = {Coin, MyChar}
+                Params.FilterType = Enum.RaycastFilterType.Exclude
+                local Result = workspace:Raycast(CamPos, Direction, Params)
+                local Occluded = Result ~= nil and Result.Distance < Distance - 2
+
+                Data.Highlight.Enabled = Occluded
+                Data.Billboard.Enabled = Occluded
+
+                if Occluded then
+                    local DistStuds = math.floor((Coin.Position - HRP.Position).Magnitude)
+                    Data.Label.Text = string.format("%s | %d studs", Coin.Name, DistStuds)
+                end
+            end
         end
     end
 end
@@ -416,7 +495,6 @@ local BagLabel = MakeLabel("Bag: 0", 42, Color3.fromRGB(255, 200, 100))
 local TotalLabel = MakeLabel("Total: 0", 60, Color3.fromRGB(255, 200, 100))
 local CandyLabel = MakeLabel("Doces: 0", 78, Color3.fromRGB(255, 150, 200))
 local TimeLabel = MakeLabel("Tempo: 0s", 96, Color3.fromRGB(150, 160, 190))
-
 local SpeedLabel = MakeLabel("Velocidade: 100", 118, Color3.fromRGB(200, 210, 255))
 
 local SpeedTrack = Instance.new("Frame")
@@ -598,7 +676,7 @@ end)
 ESPButton.MouseButton1Click:Connect(function()
     Settings.ESP = not Settings.ESP
     ESPButton.Text = "ESP COINS: " .. (Settings.ESP and "ON" or "OFF")
-    if Settings.ESP then BuildESP() else ClearESP() end
+    if not Settings.ESP then ClearAllESP() end
     SaveConfig()
 end)
 
@@ -610,7 +688,6 @@ SetMode(Settings.Mode)
 
 if Settings.ESP then
     ESPButton.Text = "ESP COINS: ON"
-    task.spawn(BuildESP)
 end
 
 if Settings.AutoFarm then
@@ -641,36 +718,19 @@ RunService.RenderStepped:Connect(function(DeltaTime)
     if Now - LastBagCheck > 1 then
         LastBagCheck = Now
         local RealBag = GetBagCoins()
-        if RealBag ~= nil then
-            LocalBagCoins = RealBag
-        end
+        if RealBag ~= nil then LocalBagCoins = RealBag end
         BagLabel.Text = "Bag: " .. LocalBagCoins
-
-        if LocalTotalCoins < LocalBagCoins then
-            LocalTotalCoins = LocalBagCoins
-        end
+        if LocalTotalCoins < LocalBagCoins then LocalTotalCoins = LocalBagCoins end
         TotalLabel.Text = "Total: " .. LocalTotalCoins
-
         local RealCandy = GetCandyCount()
-        if RealCandy ~= nil then
-            LocalCandyCoins = RealCandy
-        end
+        if RealCandy ~= nil then LocalCandyCoins = RealCandy end
         CandyLabel.Text = "Doces: " .. LocalCandyCoins
-
         TimeLabel.Text = string.format("Tempo: %ds", math.floor(Now - SessionStart))
     end
 
-    if Settings.ESP and Now - LastESPUpdate > 0.5 then
+    if Now - LastESPUpdate > 0.25 then
         LastESPUpdate = Now
-        for _, Billboard in ipairs(ESPBillboards) do
-            if Billboard and Billboard.Parent then
-                local Coin = Billboard.Parent
-                local Label = Billboard:FindFirstChildOfClass("TextLabel")
-                if Label and Coin:IsA("BasePart") then
-                    Label.Text = string.format("%s | %.0f", Coin.Name, (Coin.Position - HRP.Position).Magnitude)
-                end
-            end
-        end
+        UpdateESP()
     end
 
     if Now - LastServerHopCheck > 5 then
@@ -692,6 +752,18 @@ RunService.RenderStepped:Connect(function(DeltaTime)
     end
 
     if not Settings.AutoFarm then return end
+
+    if not IsPlaying() then
+        StatusLabel.Text = "Aguardando início da partida..."
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+        if Hum then
+            Hum.PlatformStand = false
+            Hum.WalkSpeed = 16
+        end
+        return
+    end
+
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
 
     local Nearest, Distance = GetNearestTarget(HRP.Position)
     if not Nearest then
@@ -731,11 +803,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         if Distance > 6 then
             if Now - LastTPTime > Settings.TPValidationDelay then
                 LastTPTime = Now
-                local Offset = Vector3.new(
-                    math.random(-2, 2),
-                    math.random(0, 3),
-                    math.random(-2, 2)
-                )
+                local Offset = Vector3.new(math.random(-2, 2), math.random(0, 3), math.random(-2, 2))
                 HRP.Velocity = Vector3.zero
                 HRP.CFrame = CFrame.new(Nearest.Position + Offset)
             end
@@ -757,27 +825,19 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         if Distance > 6 then
             if Distance < 25 then
                 Hum:MoveTo(Nearest.Position)
-                if Nearest.Position.Y - HRP.Position.Y > 3 then
-                    Hum.Jump = true
-                end
+                if Nearest.Position.Y - HRP.Position.Y > 3 then Hum.Jump = true end
             else
                 if not WalkPath or (Now - LastTargetRefresh > 2) then
                     LastTargetRefresh = Now
                     WalkPath = PathfindingService:CreatePath({
-                        AgentHeight = 5,
-                        AgentRadius = 2,
-                        AgentCanJump = true,
-                        WaypointSpacing = 4
+                        AgentHeight = 5, AgentRadius = 2, AgentCanJump = true, WaypointSpacing = 4
                     })
                     local Success = pcall(function()
                         WalkPath:ComputeAsync(HRP.Position, Nearest.Position)
                     end)
-                    if not Success or WalkPath.Status ~= Enum.PathStatus.Success then
-                        WalkPath = nil
-                    end
+                    if not Success or WalkPath.Status ~= Enum.PathStatus.Success then WalkPath = nil end
                     WalkIndex = 1
                 end
-
                 if WalkPath then
                     local Waypoints = WalkPath:GetWaypoints()
                     if WalkIndex <= #Waypoints then
@@ -787,15 +847,11 @@ RunService.RenderStepped:Connect(function(DeltaTime)
                             Waypoint = Waypoints[math.min(WalkIndex, #Waypoints)]
                         end
                         Hum:MoveTo(Waypoint.Position)
-                        if Waypoint.Action == Enum.PathWaypointAction.Jump then
-                            Hum.Jump = true
-                        end
+                        if Waypoint.Action == Enum.PathWaypointAction.Jump then Hum.Jump = true end
                     end
                 else
                     Hum:MoveTo(Nearest.Position)
-                    if Nearest.Position.Y - HRP.Position.Y > 3 then
-                        Hum.Jump = true
-                    end
+                    if Nearest.Position.Y - HRP.Position.Y > 3 then Hum.Jump = true end
                 end
             end
             StatusLabel.Text = string.format("Walk -> %.0f studs", Distance)
