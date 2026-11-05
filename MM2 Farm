@@ -6,6 +6,7 @@ local PathfindingService = game:GetService("PathfindingService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -239,11 +240,20 @@ local function CheckSomeoneWatching()
 end
 
 local function GetPlayerRole(Player)
+    local Data
+    pcall(function()
+        local GetPlayerData = ReplicatedStorage:FindFirstChild("GetPlayerData", true)
+        if GetPlayerData then
+            Data = GetPlayerData:InvokeServer()
+        end
+    end)
+    if Data and Data[Player] and Data[Player].Role then
+        return Data[Player].Role
+    end
     local Char = Player.Character
     local Backpack = Player:FindFirstChild("Backpack")
     local HasKnife = false
     local HasGun = false
-    
     if Char then
         if Char:FindFirstChild("Knife") then HasKnife = true end
         if Char:FindFirstChild("Gun") then HasGun = true end
@@ -252,7 +262,6 @@ local function GetPlayerRole(Player)
         if Backpack:FindFirstChild("Knife") then HasKnife = true end
         if Backpack:FindFirstChild("Gun") then HasGun = true end
     end
-    
     if HasKnife then return "Murderer" end
     if HasGun then
         if not OriginalSheriff then
@@ -278,7 +287,7 @@ end
 
 local function FireRemote(RemoteName, ...)
     local Args = {...}
-    local Remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    local Remotes = ReplicatedStorage:FindFirstChild("Remotes")
     if Remotes then
         local Remote = Remotes:FindFirstChild(RemoteName)
         if Remote and Remote:IsA("RemoteEvent") then
