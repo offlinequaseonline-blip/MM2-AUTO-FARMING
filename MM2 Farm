@@ -312,4 +312,423 @@ local function getMyTool(kw)
 end
 
 local function fireR(name, ...)
-    local rem = Rep
+    local rem = RepStorage:FindFirstChild("Remotes")
+    if rem then
+        local r = rem:FindFirstChild(name)
+        if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer(...) end) end
+    end
+end
+
+local function killAll()
+    local knife = getMyTool("knife")
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            local myc = player.Character
+            local myhrp = myc and myc:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and hrp and myhrp then
+                myhrp.CFrame = CFrame.lookAt(hrp.Position - hrp.CFrame.LookVector * 2, hrp.Position)
+                if knife then pcall(function() knife:Activate() end) end
+                fireR("Kill", p)
+                fireR("Attack", p)
+                task.wait(0.05)
+            end
+        end
+    end
+end
+
+local function shootMurder()
+    local m = getMurderer()
+    if not m or not m.Character then return end
+    local gun = getMyTool("gun") or getMyTool("sheriff")
+    local myc = player.Character
+    if not myc then return end
+    local myhrp = myc:FindFirstChild("HumanoidRootPart")
+    local thrp = m.Character:FindFirstChild("HumanoidRootPart")
+    if not myhrp or not thrp then return end
+    myhrp.CFrame = CFrame.lookAt(myhrp.Position, thrp.Position)
+    if gun then pcall(function() gun:Activate() end) end
+    fireR("Shoot", thrp.Position)
+    fireR("Fire", thrp.Position)
+    hasShot = true
+end
+
+local function flingMurder()
+    local m = getMurderer()
+    if not m or not m.Character then return end
+    local h = m.Character:FindFirstChild("HumanoidRootPart")
+    if not h then return end
+    local bv = Instance.new("BodyAngularVelocity")
+    bv.AngularVelocity = Vector3.new(math.huge, math.huge, math.huge)
+    bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    bv.Parent = h
+    task.delay(1, function() if bv then bv:Destroy() end end)
+end
+
+local function setNoclip(on)
+    local c = player.Character
+    if not c then return end
+    for _, p in ipairs(c:GetDescendants()) do
+        if p:IsA("BasePart") then p.CanCollide = not on end
+    end
+end
+
+local function serverHop()
+    if hopping then return end
+    hopping = true
+    pcall(function() TS:Teleport(game.PlaceId, player) end)
+    task.delay(5, function() hopping = false end)
+end
+
+local function setMode(m)
+    currentMode = m
+    modeLbl.Text = "Modo: " .. m
+    local sel = Color3.fromRGB(0, 120, 255)
+    local ns = Color3.fromRGB(45, 50, 70)
+    flyBtn.BackgroundColor3 = (m == "Fly") and sel or ns
+    tpBtn.BackgroundColor3 = (m == "Tp") and sel or ns
+    walkBtn.BackgroundColor3 = (m == "Walk") and sel or ns
+    if active then
+        local c = player.Character
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        if m == "Walk" then
+            if h then
+                h.PlatformStand = false
+                h.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
+            end
+            workspace.Gravity = savedGravity
+            setNoclip(false)
+        else
+            if h then h.PlatformStand = true end
+            workspace.Gravity = 0
+            setNoclip(true)
+        end
+    end
+end
+
+local function startFarm()
+    if not player.Character then return end
+    active = true
+    local c = player.Character
+    local h = c:FindFirstChildOfClass("Humanoid")
+    if currentMode == "Walk" then
+        if h then
+            h.PlatformStand = false
+            h.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
+        end
+        workspace.Gravity = savedGravity
+        setNoclip(false)
+    else
+        if h then h.PlatformStand = true end
+        workspace.Gravity = 0
+        setNoclip(true)
+    end
+    refreshCoins(true)
+    startBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    startBtn.Text = "PARAR FARM"
+    statusLbl.Text = "Farm ativo: " .. currentMode
+    statusLbl.TextColor3 = Color3.fromRGB(0, 255, 150)
+end
+
+local function stopFarm()
+    active = false
+    local c = player.Character
+    if c then
+        local h = c:FindFirstChildOfClass("Humanoid")
+        if h then
+            h.PlatformStand = false
+            h.WalkSpeed = 16
+            local hrp = c:FindFirstChild("HumanoidRootPart")
+            if hrp then h:MoveTo(hrp.Position) end
+        end
+        setNoclip(false)
+    end
+    workspace.Gravity = savedGravity
+    currentTarget = nil
+    walkPath = nil
+    startBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+    startBtn.Text = "INICIAR FARM"
+    statusLbl.Text = "Pressione E ou clique INICIAR"
+    statusLbl.TextColor3 = Color3.fromRGB(150, 160, 190)
+    targetLbl.Text = ""
+end
+
+local function destroyEsp()
+    for _, d in ipairs(espData) do
+        if d.bb then d.bb:Destroy() end
+    end
+    espData = {}
+end
+
+local function buildEsp()
+    destroyEsp()
+    if not espOn then return end
+    refreshCoins(true)
+    for _, c in ipairs(coinCache) do
+        if c.Parent then
+            local bb = Instance.new("BillboardGui")
+            bb.Size = UDim2.new(0, 220, 0, 45)
+            bb.StudsOffset = Vector3.new(0, 2.5, 0)
+            bb.AlwaysOnTop = true
+            bb.MaxDistance = 800
+            bb.Parent = c
+            local tx = Instance.new("TextLabel")
+            tx.Size = UDim2.new(1, 0, 1, 0)
+            tx.BackgroundTransparency = 1
+            tx.TextColor3 = Color3.fromRGB(0, 255, 180)
+            tx.Font = Enum.Font.GothamBold
+            tx.TextSize = 13
+            tx.TextStrokeTransparency = 0
+            tx.TextStrokeColor3 = Color3.new(0, 0, 0)
+            tx.Text = c.Name
+            tx.Parent = bb
+            table.insert(espData, {bb = bb, tx = tx, coin = c})
+        end
+    end
+end
+
+local function checkVision()
+    local c = player.Character
+    if not c then return false end
+    local myhrp = c:FindFirstChild("HumanoidRootPart")
+    if not myhrp then return false end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character then
+            local thrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if thrp then
+                local to = myhrp.Position - thrp.Position
+                if to.Magnitude < CFG.VIS_DIST then
+                    local dot = thrp.CFrame.LookVector:Dot(to.Unit)
+                    local ang = math.deg(math.acos(math.clamp(dot, -1, 1)))
+                    if ang <= CFG.FOV then
+                        local rp = RaycastParams.new()
+                        rp.FilterDescendantsInstances = {p.Character}
+                        rp.FilterType = Enum.RaycastFilterType.Exclude
+                        local res = workspace:Raycast(thrp.Position, to, rp)
+                        if res and res.Instance and res.Instance:IsDescendantOf(c) then
+                            return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return false
+end
+
+startBtn.MouseButton1Click:Connect(function()
+    if active then stopFarm() else startFarm() end
+end)
+
+espBtn.MouseButton1Click:Connect(function()
+    espOn = not espOn
+    espBtn.Text = "ESP Coins: " .. (espOn and "ON" or "OFF")
+    buildEsp()
+end)
+
+flyBtn.MouseButton1Click:Connect(function() setMode("Fly") end)
+tpBtn.MouseButton1Click:Connect(function() setMode("Tp") end)
+walkBtn.MouseButton1Click:Connect(function() setMode("Walk") end)
+
+UIS.InputBegan:Connect(function(i, gp)
+    if gp then return end
+    if i.KeyCode == Enum.KeyCode.E then
+        if active then stopFarm() else startFarm() end
+    end
+end)
+
+player.Idled:Connect(function()
+    VU:Button2Down(Vector2.new(0, 0), camera.CFrame)
+    task.wait(1)
+    VU:Button2Up(Vector2.new(0, 0), camera.CFrame)
+end)
+
+player.OnTeleport:Connect(function()
+    task.wait(3)
+    pcall(function() loadstring(game:HttpGet(REJOIN_URL))() end)
+end)
+
+setMode("Fly")
+
+RS.RenderStepped:Connect(function(dt)
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local now = tick()
+
+    if now - lastBagCheck > CFG.BAG_INT then
+        lastBagCheck = now
+        local bag = getBagCoins()
+        if bag ~= nil then
+            if bagBaseline == nil then bagBaseline = bag end
+            sessionCoins = math.max(0, bag - bagBaseline)
+            if bag > totalCoins then totalCoins = bag end
+        end
+        sessionLbl.Text = "Sessao: " .. sessionCoins
+        totalLbl.Text = "Total: " .. totalCoins
+        timeLbl.Text = "Tempo: " .. math.floor(now - sessionStart) .. "s"
+    end
+
+    if not hopping and now - lastHop > CFG.HOP_INT then
+        lastHop = now
+        local plrs = Players:GetPlayers()
+        if #plrs < CFG.MIN_PLY then
+            serverHop()
+        else
+            for _, p in ipairs(plrs) do
+                if p ~= player then
+                    local n = p.Name:lower()
+                    if n:find("admin") or n:find("mod") or n:find("owner") then
+                        serverHop()
+                        break
+                    end
+                end
+            end
+        end
+    end
+
+    if espOn and now - lastEspUpd > CFG.ESP_INT then
+        lastEspUpd = now
+        local dead = false
+        for _, d in ipairs(espData) do
+            if d.coin and d.coin.Parent and d.tx then
+                d.tx.Text = string.format("%s | %.0f", d.coin.Name, (d.coin.Position - hrp.Position).Magnitude)
+            else
+                dead = true
+            end
+        end
+        if dead then buildEsp() end
+    end
+
+    if not active then return end
+
+    refreshCoins(false)
+
+    local vision = checkVision()
+    local radius = vision and 50 or math.huge
+    local tgt = nearestCoin(hrp.Position, radius)
+    if not tgt then tgt = nearestCoin(hrp.Position, math.huge) end
+    if not currentTarget or not currentTarget.Parent or currentTarget.Transparency >= 1
+        or now - targetStart > CFG.RETARGET then
+        currentTarget = tgt
+        targetStart = now
+        walkPath = nil
+        walkLastTgt = nil
+    end
+
+    if not currentTarget then
+        targetLbl.Text = "Nenhum coin"
+        return
+    end
+
+    local dist = (currentTarget.Position - hrp.Position).Magnitude
+
+    if currentMode == "Fly" then
+        if hum then hum.PlatformStand = true end
+        if dist > CFG.COIN_RAD then
+            local step = math.min(sliderVal * dt, dist)
+            local dir = (currentTarget.Position - hrp.Position).Unit
+            hrp.CFrame = CFrame.new(hrp.Position + dir * step) * CFrame.Angles(0, math.atan2(-dir.X, -dir.Z), 0)
+            targetLbl.Text = string.format("Fly -> %.0f", dist)
+        else
+            hrp.CFrame = CFrame.new(currentTarget.Position) * CFrame.Angles(0, tick() * 6, 0)
+            targetLbl.Text = "Coletando..."
+        end
+
+    elseif currentMode == "Tp" then
+        if hum then hum.PlatformStand = true end
+        if dist > CFG.TP_RAD then
+            if now - lastTp > CFG.TP_THROTTLE then
+                lastTp = now
+                local off = Vector3.new(
+                    math.random(-CFG.TP_OFF, CFG.TP_OFF),
+                    math.random(-CFG.TP_OFF, CFG.TP_OFF),
+                    math.random(-CFG.TP_OFF, CFG.TP_OFF)
+                )
+                hrp.Velocity = Vector3.zero
+                hrp.CFrame = CFrame.new(currentTarget.Position + off)
+            end
+            targetLbl.Text = string.format("TP -> %.0f", dist)
+        else
+            hrp.Velocity = Vector3.zero
+            hrp.CFrame = CFrame.new(currentTarget.Position) * CFrame.Angles(0, tick() * 6, 0)
+            targetLbl.Text = "Coletando..."
+        end
+
+    elseif currentMode == "Walk" then
+        if hum then
+            hum.PlatformStand = false
+            hum.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
+        end
+        if dist > CFG.COIN_RAD then
+            if dist < 25 then
+                hum:MoveTo(currentTarget.Position)
+                if currentTarget.Position.Y - hrp.Position.Y > 3 then hum.Jump = true end
+            else
+                if walkLastTgt ~= currentTarget or now - lastPathComputed > CFG.PATH_INT then
+                    walkLastTgt = currentTarget
+                    lastPathComputed = now
+                    walkWpIdx = 1
+                    walkPath = PS:CreatePath({
+                        AgentHeight = 5, AgentRadius = 2,
+                        AgentCanJump = true, WaypointSpacing = 4
+                    })
+                    local ok = pcall(function() walkPath:ComputeAsync(hrp.Position, currentTarget.Position) end)
+                    if not ok or walkPath.Status ~= Enum.PathStatus.Success then walkPath = nil end
+                end
+                if walkPath then
+                    local wps = walkPath:GetWaypoints()
+                    if walkWpIdx <= #wps then
+                        local wp = wps[walkWpIdx]
+                        if (hrp.Position - wp.Position).Magnitude < 3 then
+                            walkWpIdx = walkWpIdx + 1
+                            wp = wps[math.min(walkWpIdx, #wps)]
+                        end
+                        hum:MoveTo(wp.Position)
+                        if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+                    end
+                else
+                    hum:MoveTo(currentTarget.Position)
+                    if currentTarget.Position.Y - hrp.Position.Y > 3 then hum.Jump = true end
+                end
+            end
+            targetLbl.Text = string.format("Walk -> %.0f", dist)
+        else
+            targetLbl.Text = "Coletando..."
+        end
+
+        if (hrp.Position - lastPos).Magnitude < 0.5 then
+            if now - lastPosTime > 1.5 then
+                hum.Jump = true
+                lastPosTime = now
+            end
+        else
+            lastPos = hrp.Position
+            lastPosTime = now
+        end
+    end
+
+    if sessionCoins >= 50 and not hasShot and not hasKilledAll then
+        local role = getRole()
+        if role == "Murderer" then
+            killAll()
+            hasKilledAll = true
+        elseif role == "Sheriff" then
+            shootMurder()
+        elseif role == "Innocent" then
+            local gun = getMyTool("gun")
+            if gun then
+                shootMurder()
+            else
+                gunTimer = gunTimer + dt
+                if gunTimer > CFG.FLING_DELAY then
+                    flingMurder()
+                    gunTimer = 0
+                end
+            end
+        end
+    end
+end)
