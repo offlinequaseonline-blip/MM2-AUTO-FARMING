@@ -26,9 +26,9 @@ local Settings = {
     BagFullThreshold = 50
 }
 
-local SessionStart = tick()
-local ServerJoinTime = getgenv().ServerJoinTime or tick()
-getgenv().ServerJoinTime = ServerJoinTime
+if not getgenv().ServerJoinTime then
+    getgenv().ServerJoinTime = tick()
+end
 
 if not getgenv().AutoReloaded then
     getgenv().ScriptStartTime = tick()
@@ -56,6 +56,7 @@ local HasActivatedFullBagAction = false
 local FullBagActionTime = 0
 local HasShotMurder = false
 local HasKilledAll = false
+local OriginalSheriff = nil
 
 local ESPCoinData = {}
 local ESPPlayerData = {}
@@ -183,7 +184,9 @@ local function GetCandyCount()
     for _, Name in ipairs(CandyNames) do
         local Val = LocalPlayer:FindFirstChild(Name)
         if Val and (Val:IsA("IntValue") or Val:IsA("NumberValue") or Val:IsA("StringValue")) then
-            return tonumber(Val.Value) or Val.Value
+            local num = tonumber(Val.Value)
+            if num then return num end
+            return Val.Value
         end
     end
     local Attr = LocalPlayer:GetAttribute("Candy") or LocalPlayer:GetAttribute("Candies")
@@ -192,7 +195,8 @@ local function GetCandyCount()
     if PlayerGui then
         for _, Obj in ipairs(PlayerGui:GetDescendants()) do
             if Obj:IsA("TextLabel") and Obj.Text:match("^%d[%d,]*$") then
-                local Num = tonumber(Obj.Text:gsub(",", ""))
+                local cleanText = Obj.Text:gsub(",", "")
+                local Num = tonumber(cleanText)
                 if Num and Obj.Parent then
                     for _, Sibling in ipairs(Obj.Parent:GetChildren()) do
                         if Sibling:IsA("ImageLabel") and (Sibling.Image:lower():find("candy") or Sibling.Image:lower():find("treat")) then
@@ -235,38 +239,32 @@ local function CheckSomeoneWatching()
 end
 
 local function GetPlayerRole(Player)
-    if Player == LocalPlayer then
-        local Char = GetCharacter()
-        if Char then
-            for _, Tool in ipairs(Char:GetChildren()) do
-                if Tool:IsA("Tool") then
-                    if Tool.Name == "Knife" then return "Murderer" end
-                    if Tool.Name == "Gun" then return "Sheriff" end
-                end
-            end
-        end
-        return "Innocent"
-    else
-        local Char = Player.Character
-        if Char then
-            for _, Tool in ipairs(Char:GetChildren()) do
-                if Tool:IsA("Tool") then
-                    if Tool.Name == "Knife" then return "Murderer" end
-                    if Tool.Name == "Gun" then return "Sheriff" end
-                end
-            end
-        end
-        local Backpack = Player:FindFirstChild("Backpack")
-        if Backpack then
-            for _, Tool in ipairs(Backpack:GetChildren()) do
-                if Tool:IsA("Tool") then
-                    if Tool.Name == "Knife" then return "Murderer" end
-                    if Tool.Name == "Gun" then return "Sheriff" end
-                end
-            end
-        end
-        return "Innocent"
+    local Char = Player.Character
+    local Backpack = Player:FindFirstChild("Backpack")
+    local HasKnife = false
+    local HasGun = false
+    
+    if Char then
+        if Char:FindFirstChild("Knife") then HasKnife = true end
+        if Char:FindFirstChild("Gun") then HasGun = true end
     end
+    if Backpack then
+        if Backpack:FindFirstChild("Knife") then HasKnife = true end
+        if Backpack:FindFirstChild("Gun") then HasGun = true end
+    end
+    
+    if HasKnife then return "Murderer" end
+    if HasGun then
+        if not OriginalSheriff then
+            OriginalSheriff = Player
+            return "Sheriff"
+        elseif OriginalSheriff == Player then
+            return "Sheriff"
+        else
+            return "Hero"
+        end
+    end
+    return "Innocent"
 end
 
 local function GetMyTool(Keyword)
@@ -608,7 +606,7 @@ local function UpdateGunESP()
     end
     local GunPart = nil
     for _, Obj in ipairs(workspace:GetDescendants()) do
-        if (Obj.Name == "Gun" or Obj.Name == "DroppedGun") and (Obj:IsA("BasePart") or Obj:IsA("Tool")) then
+        if (Obj.Name == "Gun") and (Obj:IsA("BasePart") or Obj:IsA("Tool")) then
             local isEquipped = false
             for _, Player in ipairs(Players:GetPlayers()) do
                 if Player.Character and Obj:IsDescendantOf(Player.Character) then
@@ -629,11 +627,13 @@ local function UpdateGunESP()
             ESPGunData = CreateGunESP(GunPart)
         end
         if not GunNotified then
-            StarterGui:SetCore("SendNotification", {
-                Title = "Gun Dropped",
-                Text = "The Sheriff's gun has been dropped!",
-                Duration = 5
-            })
+            pcall(function()
+                StarterGui:SetCore("SendNotification", {
+                    Title = "Gun Dropped",
+                    Text = "The Sheriff's gun has been dropped!",
+                    Duration = 5
+                })
+            end)
             GunNotified = true
         end
     else
@@ -885,7 +885,7 @@ local function SetMode(Mode)
     if Settings.AutoFarm then
         local Hum = GetHumanoid()
         if Mode == "Walk" then
-            if Hum then Hum.PlatformStand = false; Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 100) end
+            if Hum then Hum.PlatformStand = false; Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 50) end
             workspace.Gravity = 196.2
             SetNoclip(false)
         else
@@ -963,15 +963,20 @@ if Settings.ESPGun then ESPGunButton.Text = "ESP DROPPED GUN: ON" end
 if Settings.AutoFarm then task.spawn(StartAutoFarm) end
 
 RunService.RenderStepped:Connect(function(DeltaTime)
+    local Now = tick()
+    
+    if Now - LastBagCheck > 1 then
+        LastBagCheck = Now
+        ScriptTimeLabel.Text = string.format("Script Time: %ds", math.floor(Now - getgenv().ScriptStartTime))
+        ServerTimeLabel.Text = string.format("Server Time: %ds", math.floor(Now - getgenv().ServerJoinTime))
+    end
+
     local Char = GetCharacter()
     local HRP = GetHRP()
     local Hum = GetHumanoid()
     if not Char or not HRP or not Hum then return end
 
-    local Now = tick()
-
-    if Now - LastBagCheck > 1 then
-        LastBagCheck = Now
+    if Now - LastBagCheck < 0.1 then
         local RealBag = GetBagCoins()
         if RealBag ~= nil then LocalBagCoins = RealBag end
         BagLabel.Text = "Bag: " .. LocalBagCoins
@@ -980,8 +985,6 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         local RealCandy = GetCandyCount()
         if RealCandy ~= nil then LocalCandyCoins = RealCandy end
         CandyLabel.Text = "Candy: " .. LocalCandyCoins
-        ScriptTimeLabel.Text = string.format("Script Time: %ds", math.floor(Now - getgenv().ScriptStartTime))
-        ServerTimeLabel.Text = string.format("Server Time: %ds", math.floor(Now - ServerJoinTime))
     end
 
     if Now - LastESPUpdate > 0.25 then
@@ -1026,7 +1029,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
     end
 
     local Watching = CheckSomeoneWatching()
-    local SafeDistance = Watching and Settings.MinPlayerDistance or math.huge
+    local SafeDistance = Watching and Settings.MinPlayerDistance or 0
 
     if Settings.Mode == "Fly" then
         Hum.PlatformStand = true
@@ -1035,12 +1038,15 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         if Distance > 6 then
             local Direction = (Nearest.Position - HRP.Position).Unit
             if Distance > SafeDistance then
+                HRP.Velocity = Vector3.zero
                 HRP.CFrame = CFrame.new(HRP.Position + Direction * Settings.MaxSpeed * DeltaTime)
                 StatusLabel.Text = string.format("Fly -> %.0f studs", Distance)
             else
+                HRP.Velocity = Vector3.zero
                 StatusLabel.Text = "Maintaining distance..."
             end
         else
+            HRP.Velocity = Vector3.zero
             local Spin = tick() * 6
             local Bob = math.sin(tick() * 4) * 1.5
             HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
@@ -1072,6 +1078,12 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 50)
         workspace.Gravity = 196.2
         SetNoclip(true)
+
+        if HRP.Position.Y < -50 then
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 5, 0))
+            StatusLabel.Text = "Void detected, teleporting back!"
+            return
+        end
 
         local Murder = nil
         for _, Player in ipairs(Players:GetPlayers()) do
@@ -1141,7 +1153,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         FullBagActionTime = Now
         local Role = GetPlayerRole(LocalPlayer)
         if Role == "Murderer" then KillAllPlayers()
-        elseif Role == "Sheriff" then ShootMurderer() end
+        elseif Role == "Sheriff" or Role == "Hero" then ShootMurderer() end
     end
 
     if HasActivatedFullBagAction and not HasShotMurder and not HasKilledAll then
