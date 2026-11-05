@@ -17,7 +17,7 @@ local Settings = {
     Mode = "Fly",
     MaxSpeed = 100,
     MinPlayerDistance = 50,
-    TPValidationDelay = 0.15,
+    TPValidationDelay = 1.0,
     KillAllDelay = 0.08,
     FlingDelay = 30,
     BagFullThreshold = 50
@@ -121,12 +121,6 @@ local function IsCoin(Obj)
     return Obj:IsA("BasePart")
         and (Obj.Name:match("Coin") or Obj.Name:match("Candy") or Obj.Name:match("Treat"))
         and Obj.Transparency < 1
-end
-
-local function RefreshTargets()
-    local Now = tick()
-    if Now - LastTargetRefresh < 0.3 then return end
-    LastTargetRefresh = Now
 end
 
 local function GetNearestTarget(Position)
@@ -234,12 +228,13 @@ local function GetMyTool(Keyword)
 end
 
 local function FireRemote(RemoteName, ...)
+    local Args = {...}
     local Remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
     if Remotes then
         local Remote = Remotes:FindFirstChild(RemoteName)
         if Remote and Remote:IsA("RemoteEvent") then
             pcall(function()
-                Remote:FireServer(...)
+                Remote:FireServer(table.unpack(Args))
             end)
         end
     end
@@ -353,7 +348,7 @@ ScreenGui.DisplayOrder = 999
 ScreenGui.Parent = PlayerGui
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 360, 0, 480)
+MainFrame.Size = UDim2.new(0, 360, 0, 360)
 MainFrame.Position = UDim2.new(0, 50, 0, 100)
 MainFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
 MainFrame.BorderSizePixel = 0
@@ -422,11 +417,77 @@ local TotalLabel = MakeLabel("Total: 0", 60, Color3.fromRGB(255, 200, 100))
 local CandyLabel = MakeLabel("Doces: 0", 78, Color3.fromRGB(255, 150, 200))
 local TimeLabel = MakeLabel("Tempo: 0s", 96, Color3.fromRGB(150, 160, 190))
 
-local ModeLabel = MakeLabel("Modo: Fly", 120, Color3.fromRGB(0, 255, 180))
+local SpeedLabel = MakeLabel("Velocidade: 100", 118, Color3.fromRGB(200, 210, 255))
+
+local SpeedTrack = Instance.new("Frame")
+SpeedTrack.Size = UDim2.new(1, -24, 0, 10)
+SpeedTrack.Position = UDim2.new(0, 12, 0, 140)
+SpeedTrack.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+SpeedTrack.BorderSizePixel = 0
+SpeedTrack.Active = true
+SpeedTrack.Parent = MainFrame
+Instance.new("UICorner", SpeedTrack).CornerRadius = UDim.new(0, 5)
+
+local SpeedFill = Instance.new("Frame")
+SpeedFill.Size = UDim2.new(1, 0, 1, 0)
+SpeedFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+SpeedFill.BorderSizePixel = 0
+SpeedFill.Parent = SpeedTrack
+Instance.new("UICorner", SpeedFill).CornerRadius = UDim.new(0, 5)
+
+local SpeedKnob = Instance.new("Frame")
+SpeedKnob.Size = UDim2.new(0, 18, 0, 18)
+SpeedKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+SpeedKnob.Position = UDim2.new(1, 0, 0.5, 0)
+SpeedKnob.BackgroundColor3 = Color3.new(1, 1, 1)
+SpeedKnob.BorderSizePixel = 0
+SpeedKnob.Parent = SpeedTrack
+Instance.new("UICorner", SpeedKnob).CornerRadius = UDim.new(1, 0)
+
+local Sliding = false
+
+local function UpdateSliderVisual()
+    local Pct = math.clamp(Settings.MaxSpeed / 100, 0, 1)
+    SpeedFill.Size = UDim2.new(Pct, 0, 1, 0)
+    SpeedKnob.Position = UDim2.new(Pct, 0, 0.5, 0)
+    SpeedLabel.Text = "Velocidade: " .. math.floor(Settings.MaxSpeed)
+end
+
+local function SetSpeedFromX(X)
+    local Pct = math.clamp((X - SpeedTrack.AbsolutePosition.X) / SpeedTrack.AbsoluteSize.X, 0, 1)
+    Settings.MaxSpeed = math.floor(Pct * 100)
+    UpdateSliderVisual()
+end
+
+SpeedTrack.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        Sliding = true
+        SetSpeedFromX(Input.Position.X)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        if Sliding then
+            Sliding = false
+            SaveConfig()
+        end
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(Input)
+    if Sliding and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+        SetSpeedFromX(Input.Position.X)
+    end
+end)
+
+UpdateSliderVisual()
+
+local ModeLabel = MakeLabel("Modo: Fly", 160, Color3.fromRGB(0, 255, 180))
 
 local ModeFrame = Instance.new("Frame")
 ModeFrame.Size = UDim2.new(1, -24, 0, 28)
-ModeFrame.Position = UDim2.new(0, 12, 0, 142)
+ModeFrame.Position = UDim2.new(0, 12, 0, 182)
 ModeFrame.BackgroundTransparency = 1
 ModeFrame.Parent = MainFrame
 
@@ -450,7 +511,7 @@ local WalkButton = MakeModeButton("Walk", 2)
 
 local AutoFarmButton = Instance.new("TextButton")
 AutoFarmButton.Size = UDim2.new(1, -24, 0, 36)
-AutoFarmButton.Position = UDim2.new(0, 12, 0, 182)
+AutoFarmButton.Position = UDim2.new(0, 12, 0, 222)
 AutoFarmButton.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
 AutoFarmButton.Text = "INICIAR AUTO FARM"
 AutoFarmButton.TextColor3 = Color3.new(1, 1, 1)
@@ -461,7 +522,7 @@ Instance.new("UICorner", AutoFarmButton).CornerRadius = UDim.new(0, 6)
 
 local ESPButton = Instance.new("TextButton")
 ESPButton.Size = UDim2.new(1, -24, 0, 30)
-ESPButton.Position = UDim2.new(0, 12, 0, 228)
+ESPButton.Position = UDim2.new(0, 12, 0, 268)
 ESPButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
 ESPButton.Text = "ESP COINS: OFF"
 ESPButton.TextColor3 = Color3.new(1, 1, 1)
@@ -470,7 +531,7 @@ ESPButton.TextSize = 12
 ESPButton.Parent = MainFrame
 Instance.new("UICorner", ESPButton).CornerRadius = UDim.new(0, 5)
 
-local StatusLabel = MakeLabel("Aguardando...", 270, Color3.fromRGB(150, 160, 190))
+local StatusLabel = MakeLabel("Aguardando...", 310, Color3.fromRGB(150, 160, 190))
 
 local function SetModeVisual(Mode)
     local Selected = Color3.fromRGB(0, 120, 255)
@@ -678,7 +739,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
                 HRP.Velocity = Vector3.zero
                 HRP.CFrame = CFrame.new(Nearest.Position + Offset)
             end
-            StatusLabel.Text = string.format("TP -> %.0f studs", Distance)
+            StatusLabel.Text = string.format("TP -> %.0f studs (%.1fs)", Distance, Settings.TPValidationDelay)
         else
             HRP.Velocity = Vector3.zero
             local Spin = tick() * 6
