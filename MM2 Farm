@@ -1,512 +1,204 @@
 local Players = game:GetService("Players")
-local UIS = game:GetService("UserInputService")
-local RS = game:GetService("RunService")
-local TS = game:GetService("TeleportService")
-local VU = game:GetService("VirtualUser")
-local PS = game:GetService("PathfindingService")
-local RepStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local VirtualUser = game:GetService("VirtualUser")
+local PathfindingService = game:GetService("PathfindingService")
+local TeleportService = game:GetService("TeleportService")
+local HttpService = game:GetService("HttpService")
 
-local player = Players.LocalPlayer
-local camera = workspace.CurrentCamera
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
 local REJOIN_URL = "https://raw.githubusercontent.com/offlinequaseonline-blip/MM2-AUTO-FARMING/refs/heads/main/MM2%20Farm"
+local CONFIG_FILE = "MM2_AutoFarm_Config.json"
 
-local CFG = {
-    MAX_SLIDER = 100, START_VAL = 50,
-    COIN_PAT = "Coin", COIN_RAD = 3, TP_RAD = 6, TP_OFF = 2,
-    RETARGET = 2.5, SCAN = 0.4, HOP_INT = 5, MIN_PLY = 2,
-    FOV = 90, VIS_DIST = 150, FLING_DELAY = 30,
-    WALK_MIN = 25, WALK_MAX = 50,
-    BAG_INT = 1, ESP_INT = 0.5, PATH_INT = 2, TP_THROTTLE = 0.1
+local Settings = {
+    AutoFarm = false,
+    ESP = false,
+    Mode = "Fly",
+    MaxSpeed = 100,
+    MinPlayerDistance = 50,
+    TPValidationDelay = 0.15,
+    KillAllDelay = 0.08,
+    FlingDelay = 30,
+    BagFullThreshold = 50
 }
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "MM2Farm"
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.DisplayOrder = 999
-gui.Parent = player:WaitForChild("PlayerGui")
+local SessionStart = tick()
+local LastBagCheck = 0
+local LastCandyCheck = 0
+local LastESPUpdate = 0
+local LastTargetRefresh = 0
+local LastServerHopCheck = 0
+local LastTPTime = 0
+local LastPos = Vector3.zero
+local LastPosTime = 0
 
-local main = Instance.new("Frame")
-main.Size = UDim2.new(0, 340, 0, 420)
-main.Position = UDim2.new(0, 50, 0, 100)
-main.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
-main.BorderSizePixel = 0
-main.Active = true
-main.Parent = gui
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
-local stroke = Instance.new("UIStroke", main)
-stroke.Color = Color3.fromRGB(0, 200, 255)
-stroke.Thickness = 1.5
+local CurrentTarget = nil
+local TargetAcquiredAt = 0
+local WalkPath = nil
+local WalkIndex = 1
 
-local header = Instance.new("Frame")
-header.Size = UDim2.new(1, 0, 0, 32)
-header.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
-header.BorderSizePixel = 0
-header.Active = true
-header.Parent = main
-Instance.new("UICorner", header).CornerRadius = UDim.new(0, 10)
+local LocalBagCoins = 0
+local LocalTotalCoins = 0
+local LocalCandyCoins = 0
+local CollectedCoinIds = {}
+local CollectedCandyIds = {}
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, -16, 1, 0)
-title.Position = UDim2.new(0, 12, 0, 0)
-title.BackgroundTransparency = 1
-title.Text = "MM2 AUTO FARM"
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 14
-title.TextXAlignment = Enum.TextXAlignment.Left
-title.Parent = header
+local HasActivatedFullBagAction = false
+local FullBagActionTime = 0
+local HasShotMurder = false
+local HasKilledAll = false
 
-local function mkLbl(txt, y, sz)
-    local l = Instance.new("TextLabel")
-    l.Size = UDim2.new(1, -24, 0, sz or 18)
-    l.Position = UDim2.new(0, 12, 0, y)
-    l.BackgroundTransparency = 1
-    l.Text = txt or ""
-    l.TextColor3 = Color3.fromRGB(180, 190, 220)
-    l.Font = Enum.Font.Gotham
-    l.TextSize = 12
-    l.TextXAlignment = Enum.TextXAlignment.Left
-    l.Parent = main
-    return l
+local ESPBillboards = {}
+
+local function SaveConfig()
+    pcall(function()
+        if writefile then
+            writefile(CONFIG_FILE, HttpService:JSONEncode(Settings))
+        end
+    end)
 end
 
-local speedLbl = mkLbl("", 38)
-speedLbl.TextColor3 = Color3.fromRGB(200, 210, 255)
-
-local track = Instance.new("Frame")
-track.Size = UDim2.new(1, -24, 0, 10)
-track.Position = UDim2.new(0, 12, 0, 60)
-track.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
-track.BorderSizePixel = 0
-track.Active = true
-track.Parent = main
-Instance.new("UICorner", track).CornerRadius = UDim.new(0, 5)
-
-local fill = Instance.new("Frame")
-fill.Size = UDim2.new(CFG.START_VAL / CFG.MAX_SLIDER, 0, 1, 0)
-fill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
-fill.BorderSizePixel = 0
-fill.Parent = track
-Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 5)
-
-local knob = Instance.new("Frame")
-knob.Size = UDim2.new(0, 18, 0, 18)
-knob.AnchorPoint = Vector2.new(0.5, 0.5)
-knob.Position = UDim2.new(CFG.START_VAL / CFG.MAX_SLIDER, 0, 0.5, 0)
-knob.BackgroundColor3 = Color3.new(1, 1, 1)
-knob.BorderSizePixel = 0
-knob.Parent = track
-Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
-
-local modeLbl = mkLbl("Modo: Fly", 78)
-modeLbl.TextColor3 = Color3.fromRGB(0, 255, 180)
-
-local modesFrame = Instance.new("Frame")
-modesFrame.Size = UDim2.new(1, -24, 0, 28)
-modesFrame.Position = UDim2.new(0, 12, 0, 100)
-modesFrame.BackgroundTransparency = 1
-modesFrame.Parent = main
-
-local function mkModeBtn(text, idx)
-    local b = Instance.new("TextButton")
-    b.Size = UDim2.new(1/3, -3, 1, 0)
-    b.Position = UDim2.new(idx/3, idx * 3, 0, 0)
-    b.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
-    b.Text = text
-    b.TextColor3 = Color3.new(1, 1, 1)
-    b.Font = Enum.Font.GothamBold
-    b.TextSize = 12
-    b.Parent = modesFrame
-    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
-    return b
+local function LoadConfig()
+    pcall(function()
+        if isfile and readfile and isfile(CONFIG_FILE) then
+            local Decoded = HttpService:JSONDecode(readfile(CONFIG_FILE))
+            if type(Decoded) == "table" then
+                for Key, Value in pairs(Decoded) do
+                    if Settings[Key] ~= nil then
+                        Settings[Key] = Value
+                    end
+                end
+            end
+        end
+    end)
 end
 
-local flyBtn = mkModeBtn("Fly", 0)
-local tpBtn = mkModeBtn("TP", 1)
-local walkBtn = mkModeBtn("Walk", 2)
+LoadConfig()
 
-local startBtn = Instance.new("TextButton")
-startBtn.Size = UDim2.new(1, -24, 0, 34)
-startBtn.Position = UDim2.new(0, 12, 0, 140)
-startBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
-startBtn.Text = "INICIAR FARM"
-startBtn.TextColor3 = Color3.new(1, 1, 1)
-startBtn.Font = Enum.Font.GothamBold
-startBtn.TextSize = 14
-startBtn.Parent = main
-Instance.new("UICorner", startBtn).CornerRadius = UDim.new(0, 6)
-
-local sessionLbl = mkLbl("Sessao: 0", 182)
-sessionLbl.TextColor3 = Color3.fromRGB(255, 200, 100)
-local totalLbl = mkLbl("Total: 0", 200)
-totalLbl.TextColor3 = Color3.fromRGB(255, 200, 100)
-local timeLbl = mkLbl("Tempo: 0s", 218)
-timeLbl.TextColor3 = Color3.fromRGB(150, 160, 190)
-local targetLbl = mkLbl("", 236)
-targetLbl.TextColor3 = Color3.fromRGB(0, 255, 150)
-local statusLbl = mkLbl("Pressione E ou clique INICIAR", 254)
-statusLbl.TextColor3 = Color3.fromRGB(150, 160, 190)
-
-local espBtn = Instance.new("TextButton")
-espBtn.Size = UDim2.new(1, -24, 0, 28)
-espBtn.Position = UDim2.new(0, 12, 0, 282)
-espBtn.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
-espBtn.Text = "ESP Coins: OFF"
-espBtn.TextColor3 = Color3.new(1, 1, 1)
-espBtn.Font = Enum.Font.Gotham
-espBtn.TextSize = 12
-espBtn.Parent = main
-Instance.new("UICorner", espBtn).CornerRadius = UDim.new(0, 5)
-
-local hint = mkLbl("E = iniciar/parar  |  WASD = fly manual", 320)
-hint.TextColor3 = Color3.fromRGB(120, 125, 145)
-hint.TextSize = 11
-
-local drag, ds, sp = false, nil, nil
-header.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        drag = true; ds = i.Position; sp = main.Position
-    end
-end)
-UIS.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then drag = false end
-end)
-UIS.InputChanged:Connect(function(i)
-    if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-        local d = i.Position - ds
-        main.Position = UDim2.new(sp.X.Scale, sp.X.Offset + d.X, sp.Y.Scale, sp.Y.Offset + d.Y)
-    end
-end)
-
-local sliderVal = CFG.START_VAL
-local sliding = false
-local function updSlider()
-    local p = sliderVal / CFG.MAX_SLIDER
-    fill.Size = UDim2.new(p, 0, 1, 0)
-    knob.Position = UDim2.new(p, 0, 0.5, 0)
-    speedLbl.Text = "Velocidade: " .. math.floor(sliderVal)
-end
-local function setX(x)
-    local p = math.clamp((x - track.AbsolutePosition.X) / track.AbsoluteSize.X, 0, 1)
-    sliderVal = math.floor(p * CFG.MAX_SLIDER)
-    updSlider()
-end
-track.InputBegan:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
-        sliding = true; setX(i.Position.X)
-    end
-end)
-UIS.InputEnded:Connect(function(i)
-    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then sliding = false end
-end)
-UIS.InputChanged:Connect(function(i)
-    if sliding and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
-        setX(i.Position.X)
-    end
-end)
-updSlider()
-
-local active = false
-local currentMode = "Fly"
-local espOn = false
-local espData = {}
-local sessionCoins = 0
-local totalCoins = 0
-local bagBaseline = nil
-local sessionStart = tick()
-local lastBagCheck = 0
-local lastHop = 0
-local lastScan = 0
-local lastEspUpd = 0
-local lastPathComputed = 0
-local lastTp = 0
-local coinCache = {}
-local currentTarget = nil
-local targetStart = 0
-local walkPath = nil
-local walkWpIdx = 1
-local walkLastTgt = nil
-local lastPos = Vector3.zero
-local lastPosTime = 0
-local gunTimer = 0
-local hasShot = false
-local hasKilledAll = false
-local savedGravity = workspace.Gravity
-local hopping = false
-
-local function isCoin(o)
-    return o:IsA("BasePart") and o.Name:match(CFG.COIN_PAT) and o.Transparency < 1
+local function QueueRejoin()
+    pcall(function()
+        if queue_on_teleport then
+            queue_on_teleport('loadstring(game:HttpGet("' .. REJOIN_URL .. '"))()')
+        elseif syn and syn.queue_on_teleport then
+            syn.queue_on_teleport('loadstring(game:HttpGet("' .. REJOIN_URL .. '"))()')
+        elseif fluxus and fluxus.queue_on_teleport then
+            fluxus.queue_on_teleport('loadstring(game:HttpGet("' .. REJOIN_URL .. '"))()')
+        end
+    end)
 end
 
-local function refreshCoins(force)
-    local now = tick()
-    if not force and now - lastScan < CFG.SCAN then return end
-    lastScan = now
-    coinCache = {}
-    for _, o in ipairs(workspace:GetDescendants()) do
-        if o.Parent and isCoin(o) then table.insert(coinCache, o) end
-    end
+LocalPlayer.OnTeleport:Connect(function()
+    SaveConfig()
+    QueueRejoin()
+    task.wait(3)
+    pcall(function()
+        loadstring(game:HttpGet(REJOIN_URL))()
+    end)
+end)
+
+LocalPlayer.Idled:Connect(function()
+    VirtualUser:Button2Down(Vector2.new(0, 0), Camera.CFrame)
+    task.wait(1)
+    VirtualUser:Button2Up(Vector2.new(0, 0), Camera.CFrame)
+end)
+
+local function GetCharacter()
+    return LocalPlayer.Character
 end
 
-local function nearestCoin(pos, maxDist)
-    local best, bd = nil, maxDist or math.huge
-    for _, c in ipairs(coinCache) do
-        if c.Parent then
-            local d = (c.Position - pos).Magnitude
-            if d < bd then best, bd = c, d end
+local function GetHRP()
+    local Char = GetCharacter()
+    return Char and Char:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetHumanoid()
+    local Char = GetCharacter()
+    return Char and Char:FindFirstChildOfClass("Humanoid")
+end
+
+local function IsCoin(Obj)
+    return Obj:IsA("BasePart")
+        and (Obj.Name:match("Coin") or Obj.Name:match("Candy") or Obj.Name:match("Treat"))
+        and Obj.Transparency < 1
+end
+
+local function RefreshTargets()
+    local Now = tick()
+    if Now - LastTargetRefresh < 0.3 then return end
+    LastTargetRefresh = Now
+end
+
+local function GetNearestTarget(Position)
+    local Best, BestDist = nil, math.huge
+    for _, Obj in ipairs(workspace:GetDescendants()) do
+        if IsCoin(Obj) and Obj.Parent then
+            local Dist = (Obj.Position - Position).Magnitude
+            if Dist < BestDist then
+                Best, BestDist = Obj, Dist
+            end
         end
     end
-    return best, bd
+    return Best, BestDist
 end
 
-local function getBagCoins()
-    for _, name in ipairs({"Coins", "Coin", "CoinCount"}) do
-        local v = player:FindFirstChild(name)
-        if v and v:IsA("IntValue") then return v.Value end
+local function GetBagCoins()
+    for _, Name in ipairs({"Coins", "Coin", "CoinCount", "Bag"}) do
+        local Val = LocalPlayer:FindFirstChild(Name)
+        if Val and Val:IsA("IntValue") then return Val.Value end
     end
-    local pg = player:FindFirstChild("PlayerGui")
-    if pg then
-        for _, o in ipairs(pg:GetDescendants()) do
-            if o:IsA("IntValue") and o.Name:lower():find("coin") then return o.Value end
-            if o:IsA("StringValue") and o.Name:lower():find("coin") then
-                local n = tonumber(o.Value)
-                if n then return n end
+    local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if PlayerGui then
+        for _, Obj in ipairs(PlayerGui:GetDescendants()) do
+            if Obj:IsA("IntValue") and Obj.Name:lower():find("coin") then
+                return Obj.Value
+            end
+            if Obj:IsA("TextLabel") and (Obj.Name:lower():find("coin") or Obj.Name:lower():find("bag")) then
+                local Num = tonumber(Obj.Text:match("%d+"))
+                if Num then return Num end
             end
         end
     end
     return nil
 end
 
-local function getRole()
-    local c = player.Character
-    if not c then return "Innocent" end
-    for _, t in ipairs(c:GetChildren()) do
-        if t:IsA("Tool") then
-            local n = t.Name:lower()
-            if n:find("knife") or n:find("murder") then return "Murderer" end
-            if n:find("gun") or n:find("sheriff") then return "Sheriff" end
-        end
+local function GetCandyCount()
+    for _, Name in ipairs({"Candy", "Candies", "HalloweenCandy", "Treats", "EventCandy"}) do
+        local Val = LocalPlayer:FindFirstChild(Name)
+        if Val and (Val:IsA("IntValue") or Val:IsA("NumberValue")) then return Val.Value end
     end
-    return "Innocent"
-end
-
-local function getMurderer()
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= player and p.Character then
-            for _, t in ipairs(p.Character:GetChildren()) do
-                if t:IsA("Tool") and t.Name:lower():find("knife") then return p end
+    local Attr = LocalPlayer:GetAttribute("Candy") or LocalPlayer:GetAttribute("Candies")
+    if Attr then return Attr end
+    local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui")
+    if PlayerGui then
+        for _, Obj in ipairs(PlayerGui:GetDescendants()) do
+            if Obj:IsA("TextLabel") and Obj.Name:lower():find("candy") then
+                local Num = tonumber(Obj.Text:match("%d+"))
+                if Num then return Num end
             end
         end
     end
     return nil
 end
 
-local function getMyTool(kw)
-    local c = player.Character
-    if not c then return nil end
-    for _, t in ipairs(c:GetChildren()) do
-        if t:IsA("Tool") and t.Name:lower():find(kw) then return t end
-    end
-    return nil
-end
-
-local function fireR(name, ...)
-    local rem = RepStorage:FindFirstChild("Remotes")
-    if rem then
-        local r = rem:FindFirstChild(name)
-        if r and r:IsA("RemoteEvent") then pcall(function() r:FireServer(...) end) end
-    end
-end
-
-local function killAll()
-    local knife = getMyTool("knife")
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= player and p.Character then
-            local h = p.Character:FindFirstChildOfClass("Humanoid")
-            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
-            local myc = player.Character
-            local myhrp = myc and myc:FindFirstChild("HumanoidRootPart")
-            if h and h.Health > 0 and hrp and myhrp then
-                myhrp.CFrame = CFrame.lookAt(hrp.Position - hrp.CFrame.LookVector * 2, hrp.Position)
-                if knife then pcall(function() knife:Activate() end) end
-                fireR("Kill", p)
-                fireR("Attack", p)
-                task.wait(0.05)
-            end
-        end
-    end
-end
-
-local function shootMurder()
-    local m = getMurderer()
-    if not m or not m.Character then return end
-    local gun = getMyTool("gun") or getMyTool("sheriff")
-    local myc = player.Character
-    if not myc then return end
-    local myhrp = myc:FindFirstChild("HumanoidRootPart")
-    local thrp = m.Character:FindFirstChild("HumanoidRootPart")
-    if not myhrp or not thrp then return end
-    myhrp.CFrame = CFrame.lookAt(myhrp.Position, thrp.Position)
-    if gun then pcall(function() gun:Activate() end) end
-    fireR("Shoot", thrp.Position)
-    fireR("Fire", thrp.Position)
-    hasShot = true
-end
-
-local function flingMurder()
-    local m = getMurderer()
-    if not m or not m.Character then return end
-    local h = m.Character:FindFirstChild("HumanoidRootPart")
-    if not h then return end
-    local bv = Instance.new("BodyAngularVelocity")
-    bv.AngularVelocity = Vector3.new(math.huge, math.huge, math.huge)
-    bv.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
-    bv.Parent = h
-    task.delay(1, function() if bv then bv:Destroy() end end)
-end
-
-local function setNoclip(on)
-    local c = player.Character
-    if not c then return end
-    for _, p in ipairs(c:GetDescendants()) do
-        if p:IsA("BasePart") then p.CanCollide = not on end
-    end
-end
-
-local function serverHop()
-    if hopping then return end
-    hopping = true
-    pcall(function() TS:Teleport(game.PlaceId, player) end)
-    task.delay(5, function() hopping = false end)
-end
-
-local function setMode(m)
-    currentMode = m
-    modeLbl.Text = "Modo: " .. m
-    local sel = Color3.fromRGB(0, 120, 255)
-    local ns = Color3.fromRGB(45, 50, 70)
-    flyBtn.BackgroundColor3 = (m == "Fly") and sel or ns
-    tpBtn.BackgroundColor3 = (m == "Tp") and sel or ns
-    walkBtn.BackgroundColor3 = (m == "Walk") and sel or ns
-    if active then
-        local c = player.Character
-        local h = c and c:FindFirstChildOfClass("Humanoid")
-        if m == "Walk" then
-            if h then
-                h.PlatformStand = false
-                h.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
-            end
-            workspace.Gravity = savedGravity
-            setNoclip(false)
-        else
-            if h then h.PlatformStand = true end
-            workspace.Gravity = 0
-            setNoclip(true)
-        end
-    end
-end
-
-local function startFarm()
-    if not player.Character then return end
-    active = true
-    local c = player.Character
-    local h = c:FindFirstChildOfClass("Humanoid")
-    if currentMode == "Walk" then
-        if h then
-            h.PlatformStand = false
-            h.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
-        end
-        workspace.Gravity = savedGravity
-        setNoclip(false)
-    else
-        if h then h.PlatformStand = true end
-        workspace.Gravity = 0
-        setNoclip(true)
-    end
-    refreshCoins(true)
-    startBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    startBtn.Text = "PARAR FARM"
-    statusLbl.Text = "Farm ativo: " .. currentMode
-    statusLbl.TextColor3 = Color3.fromRGB(0, 255, 150)
-end
-
-local function stopFarm()
-    active = false
-    local c = player.Character
-    if c then
-        local h = c:FindFirstChildOfClass("Humanoid")
-        if h then
-            h.PlatformStand = false
-            h.WalkSpeed = 16
-            local hrp = c:FindFirstChild("HumanoidRootPart")
-            if hrp then h:MoveTo(hrp.Position) end
-        end
-        setNoclip(false)
-    end
-    workspace.Gravity = savedGravity
-    currentTarget = nil
-    walkPath = nil
-    startBtn.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
-    startBtn.Text = "INICIAR FARM"
-    statusLbl.Text = "Pressione E ou clique INICIAR"
-    statusLbl.TextColor3 = Color3.fromRGB(150, 160, 190)
-    targetLbl.Text = ""
-end
-
-local function destroyEsp()
-    for _, d in ipairs(espData) do
-        if d.bb then d.bb:Destroy() end
-    end
-    espData = {}
-end
-
-local function buildEsp()
-    destroyEsp()
-    if not espOn then return end
-    refreshCoins(true)
-    for _, c in ipairs(coinCache) do
-        if c.Parent then
-            local bb = Instance.new("BillboardGui")
-            bb.Size = UDim2.new(0, 220, 0, 45)
-            bb.StudsOffset = Vector3.new(0, 2.5, 0)
-            bb.AlwaysOnTop = true
-            bb.MaxDistance = 800
-            bb.Parent = c
-            local tx = Instance.new("TextLabel")
-            tx.Size = UDim2.new(1, 0, 1, 0)
-            tx.BackgroundTransparency = 1
-            tx.TextColor3 = Color3.fromRGB(0, 255, 180)
-            tx.Font = Enum.Font.GothamBold
-            tx.TextSize = 13
-            tx.TextStrokeTransparency = 0
-            tx.TextStrokeColor3 = Color3.new(0, 0, 0)
-            tx.Text = c.Name
-            tx.Parent = bb
-            table.insert(espData, {bb = bb, tx = tx, coin = c})
-        end
-    end
-end
-
-local function checkVision()
-    local c = player.Character
-    if not c then return false end
-    local myhrp = c:FindFirstChild("HumanoidRootPart")
-    if not myhrp then return false end
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= player and p.Character then
-            local thrp = p.Character:FindFirstChild("HumanoidRootPart")
-            if thrp then
-                local to = myhrp.Position - thrp.Position
-                if to.Magnitude < CFG.VIS_DIST then
-                    local dot = thrp.CFrame.LookVector:Dot(to.Unit)
-                    local ang = math.deg(math.acos(math.clamp(dot, -1, 1)))
-                    if ang <= CFG.FOV then
-                        local rp = RaycastParams.new()
-                        rp.FilterDescendantsInstances = {p.Character}
-                        rp.FilterType = Enum.RaycastFilterType.Exclude
-                        local res = workspace:Raycast(thrp.Position, to, rp)
-                        if res and res.Instance and res.Instance:IsDescendantOf(c) then
+local function CheckSomeoneWatching()
+    local MyHRP = GetHRP()
+    if not MyHRP then return false end
+    local MyPos = MyHRP.Position
+    for _, Player in ipairs(Players:GetPlayers()) do
+        if Player ~= LocalPlayer and Player.Character then
+            local TheirHRP = Player.Character:FindFirstChild("HumanoidRootPart")
+            if TheirHRP then
+                local ToMe = MyPos - TheirHRP.Position
+                if ToMe.Magnitude < 150 then
+                    local Dot = TheirHRP.CFrame.LookVector:Dot(ToMe.Unit)
+                    local Angle = math.deg(math.acos(math.clamp(Dot, -1, 1)))
+                    if Angle < 90 then
+                        local Params = RaycastParams.new()
+                        Params.FilterDescendantsInstances = {Player.Character}
+                        Params.FilterType = Enum.RaycastFilterType.Exclude
+                        local Result = workspace:Raycast(TheirHRP.Position, ToMe, Params)
+                        if Result and Result.Instance and Result.Instance:IsDescendantOf(GetCharacter()) then
                             return true
                         end
                     end
@@ -517,72 +209,420 @@ local function checkVision()
     return false
 end
 
-startBtn.MouseButton1Click:Connect(function()
-    if active then stopFarm() else startFarm() end
-end)
-
-espBtn.MouseButton1Click:Connect(function()
-    espOn = not espOn
-    espBtn.Text = "ESP Coins: " .. (espOn and "ON" or "OFF")
-    buildEsp()
-end)
-
-flyBtn.MouseButton1Click:Connect(function() setMode("Fly") end)
-tpBtn.MouseButton1Click:Connect(function() setMode("Tp") end)
-walkBtn.MouseButton1Click:Connect(function() setMode("Walk") end)
-
-UIS.InputBegan:Connect(function(i, gp)
-    if gp then return end
-    if i.KeyCode == Enum.KeyCode.E then
-        if active then stopFarm() else startFarm() end
-    end
-end)
-
-player.Idled:Connect(function()
-    VU:Button2Down(Vector2.new(0, 0), camera.CFrame)
-    task.wait(1)
-    VU:Button2Up(Vector2.new(0, 0), camera.CFrame)
-end)
-
-player.OnTeleport:Connect(function()
-    task.wait(3)
-    pcall(function() loadstring(game:HttpGet(REJOIN_URL))() end)
-end)
-
-setMode("Fly")
-
-RS.RenderStepped:Connect(function(dt)
-    local char = player.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    local now = tick()
-
-    if now - lastBagCheck > CFG.BAG_INT then
-        lastBagCheck = now
-        local bag = getBagCoins()
-        if bag ~= nil then
-            if bagBaseline == nil then bagBaseline = bag end
-            sessionCoins = math.max(0, bag - bagBaseline)
-            if bag > totalCoins then totalCoins = bag end
+local function GetMurderer()
+    for _, Player in ipairs(Players:GetPlayers()) do
+        if Player ~= LocalPlayer and Player.Character then
+            for _, Tool in ipairs(Player.Character:GetChildren()) do
+                if Tool:IsA("Tool") and Tool.Name:lower():find("knife") then
+                    return Player
+                end
+            end
         end
-        sessionLbl.Text = "Sessao: " .. sessionCoins
-        totalLbl.Text = "Total: " .. totalCoins
-        timeLbl.Text = "Tempo: " .. math.floor(now - sessionStart) .. "s"
+    end
+    return nil
+end
+
+local function GetMyTool(Keyword)
+    local Char = GetCharacter()
+    if not Char then return nil end
+    for _, Tool in ipairs(Char:GetChildren()) do
+        if Tool:IsA("Tool") and Tool.Name:lower():find(Keyword) then
+            return Tool
+        end
+    end
+    return nil
+end
+
+local function FireRemote(RemoteName, ...)
+    local Remotes = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes")
+    if Remotes then
+        local Remote = Remotes:FindFirstChild(RemoteName)
+        if Remote and Remote:IsA("RemoteEvent") then
+            pcall(function()
+                Remote:FireServer(...)
+            end)
+        end
+    end
+end
+
+local function KillAllPlayers()
+    local Knife = GetMyTool("knife")
+    for _, Player in ipairs(Players:GetPlayers()) do
+        if Player ~= LocalPlayer and Player.Character then
+            local TheirHum = Player.Character:FindFirstChildOfClass("Humanoid")
+            local TheirHRP = Player.Character:FindFirstChild("HumanoidRootPart")
+            local MyHRP = GetHRP()
+            if TheirHum and TheirHum.Health > 0 and TheirHRP and MyHRP then
+                MyHRP.CFrame = CFrame.lookAt(TheirHRP.Position - TheirHRP.CFrame.LookVector * 2, TheirHRP.Position)
+                if Knife then pcall(function() Knife:Activate() end) end
+                FireRemote("Kill", Player)
+                FireRemote("Attack", Player)
+                task.wait(Settings.KillAllDelay)
+            end
+        end
+    end
+    HasKilledAll = true
+end
+
+local function ShootMurderer()
+    local Murderer = GetMurderer()
+    if not Murderer or not Murderer.Character then return end
+    local Gun = GetMyTool("gun") or GetMyTool("sheriff")
+    local MyHRP = GetHRP()
+    local TheirHRP = Murderer.Character:FindFirstChild("HumanoidRootPart")
+    if not MyHRP or not TheirHRP then return end
+    MyHRP.CFrame = CFrame.lookAt(MyHRP.Position, TheirHRP.Position)
+    if Gun then pcall(function() Gun:Activate() end) end
+    FireRemote("Shoot", TheirHRP.Position)
+    FireRemote("Fire", TheirHRP.Position)
+    HasShotMurder = true
+end
+
+local function FlingMurderer()
+    local Murderer = GetMurderer()
+    if not Murderer or not Murderer.Character then return end
+    local HRP = Murderer.Character:FindFirstChild("HumanoidRootPart")
+    if not HRP then return end
+    local BV = Instance.new("BodyAngularVelocity")
+    BV.AngularVelocity = Vector3.new(math.huge, math.huge, math.huge)
+    BV.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+    BV.Parent = HRP
+    task.delay(1, function()
+        if BV then BV:Destroy() end
+    end)
+end
+
+local function ServerHop()
+    pcall(function()
+        TeleportService:Teleport(game.PlaceId, LocalPlayer)
+    end)
+end
+
+local function SetNoclip(Enabled)
+    local Char = GetCharacter()
+    if not Char then return end
+    for _, Part in ipairs(Char:GetDescendants()) do
+        if Part:IsA("BasePart") then
+            Part.CanCollide = not Enabled
+        end
+    end
+end
+
+local function ClearESP()
+    for _, Billboard in ipairs(ESPBillboards) do
+        if Billboard then Billboard:Destroy() end
+    end
+    ESPBillboards = {}
+end
+
+local function BuildESP()
+    ClearESP()
+    if not Settings.ESP then return end
+    local MyHRP = GetHRP()
+    if not MyHRP then return end
+    for _, Obj in ipairs(workspace:GetDescendants()) do
+        if IsCoin(Obj) and Obj.Parent then
+            local Billboard = Instance.new("BillboardGui")
+            Billboard.Size = UDim2.new(0, 200, 0, 40)
+            Billboard.StudsOffset = Vector3.new(0, 3, 0)
+            Billboard.AlwaysOnTop = true
+            Billboard.MaxDistance = 1000
+            Billboard.Parent = Obj
+            local Label = Instance.new("TextLabel")
+            Label.Size = UDim2.new(1, 0, 1, 0)
+            Label.BackgroundTransparency = 1
+            Label.TextColor3 = Color3.fromRGB(0, 255, 180)
+            Label.Font = Enum.Font.GothamBold
+            Label.TextSize = 13
+            Label.TextStrokeTransparency = 0
+            Label.TextStrokeColor3 = Color3.new(0, 0, 0)
+            Label.Text = string.format("%s | %.0f", Obj.Name, (Obj.Position - MyHRP.Position).Magnitude)
+            Label.Parent = Billboard
+            table.insert(ESPBillboards, Billboard)
+        end
+    end
+end
+
+local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
+
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "MM2AutoFarm"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.IgnoreGuiInset = true
+ScreenGui.DisplayOrder = 999
+ScreenGui.Parent = PlayerGui
+
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 360, 0, 480)
+MainFrame.Position = UDim2.new(0, 50, 0, 100)
+MainFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Parent = ScreenGui
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+local Stroke = Instance.new("UIStroke", MainFrame)
+Stroke.Color = Color3.fromRGB(0, 200, 255)
+Stroke.Thickness = 1.5
+
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 34)
+Header.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
+Header.BorderSizePixel = 0
+Header.Active = true
+Header.Parent = MainFrame
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 10)
+
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, -16, 1, 0)
+Title.Position = UDim2.new(0, 12, 0, 0)
+Title.BackgroundTransparency = 1
+Title.Text = "MM2 AUTO FARM"
+Title.TextColor3 = Color3.new(1, 1, 1)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 14
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.Parent = Header
+
+local DragEnabled, DragStart, StartPos = false, nil, nil
+Header.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        DragEnabled = true
+        DragStart = Input.Position
+        StartPos = MainFrame.Position
+    end
+end)
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        DragEnabled = false
+    end
+end)
+UserInputService.InputChanged:Connect(function(Input)
+    if DragEnabled and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+        local Delta = Input.Position - DragStart
+        MainFrame.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + Delta.X, StartPos.Y.Scale, StartPos.Y.Offset + Delta.Y)
+    end
+end)
+
+local function MakeLabel(Text, Y, Color)
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, -24, 0, 18)
+    Label.Position = UDim2.new(0, 12, 0, Y)
+    Label.BackgroundTransparency = 1
+    Label.Text = Text or ""
+    Label.TextColor3 = Color or Color3.fromRGB(180, 190, 220)
+    Label.Font = Enum.Font.Gotham
+    Label.TextSize = 12
+    Label.TextXAlignment = Enum.TextXAlignment.Left
+    Label.Parent = MainFrame
+    return Label
+end
+
+local BagLabel = MakeLabel("Bag: 0", 42, Color3.fromRGB(255, 200, 100))
+local TotalLabel = MakeLabel("Total: 0", 60, Color3.fromRGB(255, 200, 100))
+local CandyLabel = MakeLabel("Doces: 0", 78, Color3.fromRGB(255, 150, 200))
+local TimeLabel = MakeLabel("Tempo: 0s", 96, Color3.fromRGB(150, 160, 190))
+
+local ModeLabel = MakeLabel("Modo: Fly", 120, Color3.fromRGB(0, 255, 180))
+
+local ModeFrame = Instance.new("Frame")
+ModeFrame.Size = UDim2.new(1, -24, 0, 28)
+ModeFrame.Position = UDim2.new(0, 12, 0, 142)
+ModeFrame.BackgroundTransparency = 1
+ModeFrame.Parent = MainFrame
+
+local function MakeModeButton(Text, Index)
+    local Button = Instance.new("TextButton")
+    Button.Size = UDim2.new(1/3, -3, 1, 0)
+    Button.Position = UDim2.new(Index/3, Index * 3, 0, 0)
+    Button.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+    Button.Text = Text
+    Button.TextColor3 = Color3.new(1, 1, 1)
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 12
+    Button.Parent = ModeFrame
+    Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 5)
+    return Button
+end
+
+local FlyButton = MakeModeButton("Fly", 0)
+local TPButton = MakeModeButton("TP", 1)
+local WalkButton = MakeModeButton("Walk", 2)
+
+local AutoFarmButton = Instance.new("TextButton")
+AutoFarmButton.Size = UDim2.new(1, -24, 0, 36)
+AutoFarmButton.Position = UDim2.new(0, 12, 0, 182)
+AutoFarmButton.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+AutoFarmButton.Text = "INICIAR AUTO FARM"
+AutoFarmButton.TextColor3 = Color3.new(1, 1, 1)
+AutoFarmButton.Font = Enum.Font.GothamBold
+AutoFarmButton.TextSize = 14
+AutoFarmButton.Parent = MainFrame
+Instance.new("UICorner", AutoFarmButton).CornerRadius = UDim.new(0, 6)
+
+local ESPButton = Instance.new("TextButton")
+ESPButton.Size = UDim2.new(1, -24, 0, 30)
+ESPButton.Position = UDim2.new(0, 12, 0, 228)
+ESPButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ESPButton.Text = "ESP COINS: OFF"
+ESPButton.TextColor3 = Color3.new(1, 1, 1)
+ESPButton.Font = Enum.Font.Gotham
+ESPButton.TextSize = 12
+ESPButton.Parent = MainFrame
+Instance.new("UICorner", ESPButton).CornerRadius = UDim.new(0, 5)
+
+local StatusLabel = MakeLabel("Aguardando...", 270, Color3.fromRGB(150, 160, 190))
+
+local function SetModeVisual(Mode)
+    local Selected = Color3.fromRGB(0, 120, 255)
+    local Normal = Color3.fromRGB(45, 50, 70)
+    FlyButton.BackgroundColor3 = (Mode == "Fly") and Selected or Normal
+    TPButton.BackgroundColor3 = (Mode == "Tp") and Selected or Normal
+    WalkButton.BackgroundColor3 = (Mode == "Walk") and Selected or Normal
+    ModeLabel.Text = "Modo: " .. Mode
+end
+
+local function SetMode(Mode)
+    Settings.Mode = Mode
+    SetModeVisual(Mode)
+    if Settings.AutoFarm then
+        local Hum = GetHumanoid()
+        if Mode == "Walk" then
+            if Hum then
+                Hum.PlatformStand = false
+                Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 100)
+            end
+            workspace.Gravity = 196.2
+            SetNoclip(false)
+        else
+            if Hum then Hum.PlatformStand = true end
+            workspace.Gravity = 0
+            SetNoclip(true)
+        end
+    end
+    SaveConfig()
+end
+
+local function StartAutoFarm()
+    Settings.AutoFarm = true
+    AutoFarmButton.Text = "PARAR AUTO FARM"
+    AutoFarmButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    StatusLabel.Text = "Farm ativo: " .. Settings.Mode
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+    SetMode(Settings.Mode)
+    SaveConfig()
+end
+
+local function StopAutoFarm()
+    Settings.AutoFarm = false
+    AutoFarmButton.Text = "INICIAR AUTO FARM"
+    AutoFarmButton.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+    StatusLabel.Text = "Farm parado"
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 160, 190)
+    local Hum = GetHumanoid()
+    if Hum then
+        Hum.PlatformStand = false
+        Hum.WalkSpeed = 16
+    end
+    workspace.Gravity = 196.2
+    SetNoclip(false)
+    CurrentTarget = nil
+    WalkPath = nil
+    SaveConfig()
+end
+
+AutoFarmButton.MouseButton1Click:Connect(function()
+    if Settings.AutoFarm then StopAutoFarm() else StartAutoFarm() end
+end)
+
+ESPButton.MouseButton1Click:Connect(function()
+    Settings.ESP = not Settings.ESP
+    ESPButton.Text = "ESP COINS: " .. (Settings.ESP and "ON" or "OFF")
+    if Settings.ESP then BuildESP() else ClearESP() end
+    SaveConfig()
+end)
+
+FlyButton.MouseButton1Click:Connect(function() SetMode("Fly") end)
+TPButton.MouseButton1Click:Connect(function() SetMode("Tp") end)
+WalkButton.MouseButton1Click:Connect(function() SetMode("Walk") end)
+
+SetMode(Settings.Mode)
+
+if Settings.ESP then
+    ESPButton.Text = "ESP COINS: ON"
+    task.spawn(BuildESP)
+end
+
+if Settings.AutoFarm then
+    task.spawn(StartAutoFarm)
+end
+
+local function GetRole()
+    local Char = GetCharacter()
+    if not Char then return "Innocent" end
+    for _, Tool in ipairs(Char:GetChildren()) do
+        if Tool:IsA("Tool") then
+            local Name = Tool.Name:lower()
+            if Name:find("knife") or Name:find("murder") then return "Murderer" end
+            if Name:find("gun") or Name:find("sheriff") then return "Sheriff" end
+        end
+    end
+    return "Innocent"
+end
+
+RunService.RenderStepped:Connect(function(DeltaTime)
+    local Char = GetCharacter()
+    local HRP = GetHRP()
+    local Hum = GetHumanoid()
+    if not Char or not HRP or not Hum then return end
+
+    local Now = tick()
+
+    if Now - LastBagCheck > 1 then
+        LastBagCheck = Now
+        local RealBag = GetBagCoins()
+        if RealBag ~= nil then
+            LocalBagCoins = RealBag
+        end
+        BagLabel.Text = "Bag: " .. LocalBagCoins
+
+        if LocalTotalCoins < LocalBagCoins then
+            LocalTotalCoins = LocalBagCoins
+        end
+        TotalLabel.Text = "Total: " .. LocalTotalCoins
+
+        local RealCandy = GetCandyCount()
+        if RealCandy ~= nil then
+            LocalCandyCoins = RealCandy
+        end
+        CandyLabel.Text = "Doces: " .. LocalCandyCoins
+
+        TimeLabel.Text = string.format("Tempo: %ds", math.floor(Now - SessionStart))
     end
 
-    if not hopping and now - lastHop > CFG.HOP_INT then
-        lastHop = now
-        local plrs = Players:GetPlayers()
-        if #plrs < CFG.MIN_PLY then
-            serverHop()
+    if Settings.ESP and Now - LastESPUpdate > 0.5 then
+        LastESPUpdate = Now
+        for _, Billboard in ipairs(ESPBillboards) do
+            if Billboard and Billboard.Parent then
+                local Coin = Billboard.Parent
+                local Label = Billboard:FindFirstChildOfClass("TextLabel")
+                if Label and Coin:IsA("BasePart") then
+                    Label.Text = string.format("%s | %.0f", Coin.Name, (Coin.Position - HRP.Position).Magnitude)
+                end
+            end
+        end
+    end
+
+    if Now - LastServerHopCheck > 5 then
+        LastServerHopCheck = Now
+        local PlayerCount = #Players:GetPlayers()
+        if PlayerCount < 2 then
+            ServerHop()
         else
-            for _, p in ipairs(plrs) do
-                if p ~= player then
-                    local n = p.Name:lower()
-                    if n:find("admin") or n:find("mod") or n:find("owner") then
-                        serverHop()
+            for _, Player in ipairs(Players:GetPlayers()) do
+                if Player ~= LocalPlayer then
+                    local Name = Player.Name:lower()
+                    if Name:find("admin") or Name:find("owner") or Name:find("mod") then
+                        ServerHop()
                         break
                     end
                 end
@@ -590,144 +630,151 @@ RS.RenderStepped:Connect(function(dt)
         end
     end
 
-    if espOn and now - lastEspUpd > CFG.ESP_INT then
-        lastEspUpd = now
-        local dead = false
-        for _, d in ipairs(espData) do
-            if d.coin and d.coin.Parent and d.tx then
-                d.tx.Text = string.format("%s | %.0f", d.coin.Name, (d.coin.Position - hrp.Position).Magnitude)
-            else
-                dead = true
-            end
-        end
-        if dead then buildEsp() end
-    end
+    if not Settings.AutoFarm then return end
 
-    if not active then return end
-
-    refreshCoins(false)
-
-    local vision = checkVision()
-    local radius = vision and 50 or math.huge
-    local tgt = nearestCoin(hrp.Position, radius)
-    if not tgt then tgt = nearestCoin(hrp.Position, math.huge) end
-    if not currentTarget or not currentTarget.Parent or currentTarget.Transparency >= 1
-        or now - targetStart > CFG.RETARGET then
-        currentTarget = tgt
-        targetStart = now
-        walkPath = nil
-        walkLastTgt = nil
-    end
-
-    if not currentTarget then
-        targetLbl.Text = "Nenhum coin"
+    local Nearest, Distance = GetNearestTarget(HRP.Position)
+    if not Nearest then
+        StatusLabel.Text = "Nenhum coin encontrado"
         return
     end
 
-    local dist = (currentTarget.Position - hrp.Position).Magnitude
+    local Watching = CheckSomeoneWatching()
+    local SafeDistance = Watching and Settings.MinPlayerDistance or math.huge
 
-    if currentMode == "Fly" then
-        if hum then hum.PlatformStand = true end
-        if dist > CFG.COIN_RAD then
-            local step = math.min(sliderVal * dt, dist)
-            local dir = (currentTarget.Position - hrp.Position).Unit
-            hrp.CFrame = CFrame.new(hrp.Position + dir * step) * CFrame.Angles(0, math.atan2(-dir.X, -dir.Z), 0)
-            targetLbl.Text = string.format("Fly -> %.0f", dist)
-        else
-            hrp.CFrame = CFrame.new(currentTarget.Position) * CFrame.Angles(0, tick() * 6, 0)
-            targetLbl.Text = "Coletando..."
-        end
+    if Settings.Mode == "Fly" then
+        Hum.PlatformStand = true
+        workspace.Gravity = 0
+        SetNoclip(true)
 
-    elseif currentMode == "Tp" then
-        if hum then hum.PlatformStand = true end
-        if dist > CFG.TP_RAD then
-            if now - lastTp > CFG.TP_THROTTLE then
-                lastTp = now
-                local off = Vector3.new(
-                    math.random(-CFG.TP_OFF, CFG.TP_OFF),
-                    math.random(-CFG.TP_OFF, CFG.TP_OFF),
-                    math.random(-CFG.TP_OFF, CFG.TP_OFF)
-                )
-                hrp.Velocity = Vector3.zero
-                hrp.CFrame = CFrame.new(currentTarget.Position + off)
-            end
-            targetLbl.Text = string.format("TP -> %.0f", dist)
-        else
-            hrp.Velocity = Vector3.zero
-            hrp.CFrame = CFrame.new(currentTarget.Position) * CFrame.Angles(0, tick() * 6, 0)
-            targetLbl.Text = "Coletando..."
-        end
-
-    elseif currentMode == "Walk" then
-        if hum then
-            hum.PlatformStand = false
-            hum.WalkSpeed = math.clamp(sliderVal, CFG.WALK_MIN, CFG.WALK_MAX)
-        end
-        if dist > CFG.COIN_RAD then
-            if dist < 25 then
-                hum:MoveTo(currentTarget.Position)
-                if currentTarget.Position.Y - hrp.Position.Y > 3 then hum.Jump = true end
+        if Distance > 6 then
+            local Direction = (Nearest.Position - HRP.Position).Unit
+            local Step = math.min(Settings.MaxSpeed * DeltaTime, Distance)
+            if Distance > SafeDistance then
+                HRP.CFrame = CFrame.new(HRP.Position + Direction * Step) * CFrame.Angles(0, math.atan2(-Direction.X, -Direction.Z), 0)
+                StatusLabel.Text = string.format("Fly -> %.0f studs", Distance)
             else
-                if walkLastTgt ~= currentTarget or now - lastPathComputed > CFG.PATH_INT then
-                    walkLastTgt = currentTarget
-                    lastPathComputed = now
-                    walkWpIdx = 1
-                    walkPath = PS:CreatePath({
-                        AgentHeight = 5, AgentRadius = 2,
-                        AgentCanJump = true, WaypointSpacing = 4
-                    })
-                    local ok = pcall(function() walkPath:ComputeAsync(hrp.Position, currentTarget.Position) end)
-                    if not ok or walkPath.Status ~= Enum.PathStatus.Success then walkPath = nil end
+                StatusLabel.Text = "Mantendo distância..."
+            end
+        else
+            local Spin = tick() * 6
+            local Bob = math.sin(tick() * 4) * 1.5
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
+            StatusLabel.Text = "Coletando (Fly)..."
+        end
+
+    elseif Settings.Mode == "Tp" then
+        Hum.PlatformStand = true
+        workspace.Gravity = 0
+        SetNoclip(true)
+
+        if Distance > 6 then
+            if Now - LastTPTime > Settings.TPValidationDelay then
+                LastTPTime = Now
+                local Offset = Vector3.new(
+                    math.random(-2, 2),
+                    math.random(0, 3),
+                    math.random(-2, 2)
+                )
+                HRP.Velocity = Vector3.zero
+                HRP.CFrame = CFrame.new(Nearest.Position + Offset)
+            end
+            StatusLabel.Text = string.format("TP -> %.0f studs", Distance)
+        else
+            HRP.Velocity = Vector3.zero
+            local Spin = tick() * 6
+            local Bob = math.sin(tick() * 4) * 1.5
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
+            StatusLabel.Text = "Coletando (TP)..."
+        end
+
+    elseif Settings.Mode == "Walk" then
+        Hum.PlatformStand = false
+        Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 100)
+        workspace.Gravity = 196.2
+        SetNoclip(true)
+
+        if Distance > 6 then
+            if Distance < 25 then
+                Hum:MoveTo(Nearest.Position)
+                if Nearest.Position.Y - HRP.Position.Y > 3 then
+                    Hum.Jump = true
                 end
-                if walkPath then
-                    local wps = walkPath:GetWaypoints()
-                    if walkWpIdx <= #wps then
-                        local wp = wps[walkWpIdx]
-                        if (hrp.Position - wp.Position).Magnitude < 3 then
-                            walkWpIdx = walkWpIdx + 1
-                            wp = wps[math.min(walkWpIdx, #wps)]
+            else
+                if not WalkPath or (Now - LastTargetRefresh > 2) then
+                    LastTargetRefresh = Now
+                    WalkPath = PathfindingService:CreatePath({
+                        AgentHeight = 5,
+                        AgentRadius = 2,
+                        AgentCanJump = true,
+                        WaypointSpacing = 4
+                    })
+                    local Success = pcall(function()
+                        WalkPath:ComputeAsync(HRP.Position, Nearest.Position)
+                    end)
+                    if not Success or WalkPath.Status ~= Enum.PathStatus.Success then
+                        WalkPath = nil
+                    end
+                    WalkIndex = 1
+                end
+
+                if WalkPath then
+                    local Waypoints = WalkPath:GetWaypoints()
+                    if WalkIndex <= #Waypoints then
+                        local Waypoint = Waypoints[WalkIndex]
+                        if (HRP.Position - Waypoint.Position).Magnitude < 3 then
+                            WalkIndex = WalkIndex + 1
+                            Waypoint = Waypoints[math.min(WalkIndex, #Waypoints)]
                         end
-                        hum:MoveTo(wp.Position)
-                        if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
+                        Hum:MoveTo(Waypoint.Position)
+                        if Waypoint.Action == Enum.PathWaypointAction.Jump then
+                            Hum.Jump = true
+                        end
                     end
                 else
-                    hum:MoveTo(currentTarget.Position)
-                    if currentTarget.Position.Y - hrp.Position.Y > 3 then hum.Jump = true end
+                    Hum:MoveTo(Nearest.Position)
+                    if Nearest.Position.Y - HRP.Position.Y > 3 then
+                        Hum.Jump = true
+                    end
                 end
             end
-            targetLbl.Text = string.format("Walk -> %.0f", dist)
+            StatusLabel.Text = string.format("Walk -> %.0f studs", Distance)
         else
-            targetLbl.Text = "Coletando..."
+            local Spin = tick() * 6
+            local Bob = math.sin(tick() * 4) * 1.5
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
+            StatusLabel.Text = "Coletando (Walk)..."
         end
 
-        if (hrp.Position - lastPos).Magnitude < 0.5 then
-            if now - lastPosTime > 1.5 then
-                hum.Jump = true
-                lastPosTime = now
+        if (HRP.Position - LastPos).Magnitude < 0.5 then
+            if Now - LastPosTime > 1.5 then
+                Hum.Jump = true
+                LastPosTime = Now
             end
         else
-            lastPos = hrp.Position
-            lastPosTime = now
+            LastPos = HRP.Position
+            LastPosTime = Now
         end
     end
 
-    if sessionCoins >= 50 and not hasShot and not hasKilledAll then
-        local role = getRole()
-        if role == "Murderer" then
-            killAll()
-            hasKilledAll = true
-        elseif role == "Sheriff" then
-            shootMurder()
-        elseif role == "Innocent" then
-            local gun = getMyTool("gun")
-            if gun then
-                shootMurder()
-            else
-                gunTimer = gunTimer + dt
-                if gunTimer > CFG.FLING_DELAY then
-                    flingMurder()
-                    gunTimer = 0
-                end
+    if LocalBagCoins >= Settings.BagFullThreshold and not HasActivatedFullBagAction then
+        HasActivatedFullBagAction = true
+        FullBagActionTime = Now
+        local Role = GetRole()
+        if Role == "Murderer" then
+            KillAllPlayers()
+        elseif Role == "Sheriff" then
+            ShootMurderer()
+        end
+    end
+
+    if HasActivatedFullBagAction and not HasShotMurder and not HasKilledAll then
+        local Role = GetRole()
+        if Role == "Innocent" then
+            local Gun = GetMyTool("gun")
+            if Gun then
+                ShootMurderer()
+            elseif Now - FullBagActionTime > Settings.FlingDelay then
+                FlingMurderer()
             end
         end
     end
