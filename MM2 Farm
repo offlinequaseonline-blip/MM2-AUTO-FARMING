@@ -5,6 +5,7 @@ local VirtualUser = game:GetService("VirtualUser")
 local PathfindingService = game:GetService("PathfindingService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
 
 local LocalPlayer = Players.LocalPlayer
 local Camera = workspace.CurrentCamera
@@ -15,10 +16,11 @@ local Settings = {
     AutoFarm = false,
     ESPCoins = false,
     ESPPlayers = false,
+    ESPGun = false,
     Mode = "Fly",
     MaxSpeed = 100,
     MinPlayerDistance = 50,
-    TPValidationDelay = 1.2,
+    TPValidationDelay = 0.75,
     KillAllDelay = 0.08,
     FlingDelay = 30,
     BagFullThreshold = 50
@@ -57,6 +59,8 @@ local HasKilledAll = false
 
 local ESPCoinData = {}
 local ESPPlayerData = {}
+local ESPGunData = nil
+local GunNotified = false
 
 local function SaveConfig()
     pcall(function()
@@ -236,9 +240,8 @@ local function GetPlayerRole(Player)
         if Char then
             for _, Tool in ipairs(Char:GetChildren()) do
                 if Tool:IsA("Tool") then
-                    local Name = Tool.Name:lower()
-                    if Name:find("knife") or Name:find("murder") then return "Murderer" end
-                    if Name:find("gun") or Name:find("sheriff") then return "Sheriff" end
+                    if Tool.Name == "Knife" then return "Murderer" end
+                    if Tool.Name == "Gun" then return "Sheriff" end
                 end
             end
         end
@@ -248,9 +251,17 @@ local function GetPlayerRole(Player)
         if Char then
             for _, Tool in ipairs(Char:GetChildren()) do
                 if Tool:IsA("Tool") then
-                    local Name = Tool.Name:lower()
-                    if Name:find("knife") then return "Murderer" end
-                    if Name:find("gun") then return "Sheriff" end
+                    if Tool.Name == "Knife" then return "Murderer" end
+                    if Tool.Name == "Gun" then return "Sheriff" end
+                end
+            end
+        end
+        local Backpack = Player:FindFirstChild("Backpack")
+        if Backpack then
+            for _, Tool in ipairs(Backpack:GetChildren()) do
+                if Tool:IsA("Tool") then
+                    if Tool.Name == "Knife" then return "Murderer" end
+                    if Tool.Name == "Gun" then return "Sheriff" end
                 end
             end
         end
@@ -434,6 +445,38 @@ local function CreatePlayerESP(Player)
     return {Highlight = Highlight, Billboard = Billboard, Label = Label}
 end
 
+local function CreateGunESP(GunPart)
+    local Highlight = Instance.new("Highlight")
+    Highlight.FillColor = Color3.fromRGB(255, 255, 0)
+    Highlight.FillTransparency = 0.7
+    Highlight.OutlineColor = Color3.fromRGB(255, 255, 0)
+    Highlight.OutlineTransparency = 0
+    Highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    Highlight.Adornee = GunPart
+    Highlight.Parent = GunPart
+
+    local Billboard = Instance.new("BillboardGui")
+    Billboard.Size = UDim2.new(0, 150, 0, 26)
+    Billboard.StudsOffset = Vector3.new(0, 3, 0)
+    Billboard.AlwaysOnTop = true
+    Billboard.MaxDistance = 1000
+    Billboard.Parent = GunPart
+
+    local Label = Instance.new("TextLabel")
+    Label.Size = UDim2.new(1, 0, 1, 0)
+    Label.BackgroundTransparency = 1
+    Label.TextColor3 = Color3.fromRGB(255, 255, 0)
+    Label.Font = Enum.Font.GothamBold
+    Label.TextSize = 12
+    Label.TextStrokeTransparency = 0.4
+    Label.TextStrokeColor3 = Color3.new(0, 0, 0)
+    Label.TextXAlignment = Enum.TextXAlignment.Center
+    Label.Text = "DROPPED GUN"
+    Label.Parent = Billboard
+
+    return {Highlight = Highlight, Billboard = Billboard, Label = Label}
+end
+
 local function ClearCoinESP()
     for Coin, Data in pairs(ESPCoinData) do
         if Data.Highlight then Data.Highlight:Destroy() end
@@ -448,6 +491,15 @@ local function ClearPlayerESP()
         if Data.Billboard then Data.Billboard:Destroy() end
     end
     ESPPlayerData = {}
+end
+
+local function ClearGunESP()
+    if ESPGunData then
+        if ESPGunData.Highlight then ESPGunData.Highlight:Destroy() end
+        if ESPGunData.Billboard then ESPGunData.Billboard:Destroy() end
+        ESPGunData = nil
+    end
+    GunNotified = false
 end
 
 local function UpdateCoinESP()
@@ -536,6 +588,7 @@ local function UpdatePlayerESP()
                 local Color
                 if Role == "Murderer" then Color = Color3.fromRGB(255, 50, 50)
                 elseif Role == "Sheriff" then Color = Color3.fromRGB(50, 150, 255)
+                elseif Role == "Hero" then Color = Color3.fromRGB(255, 255, 0)
                 else Color = Color3.fromRGB(50, 255, 50) end
 
                 Data.Highlight.FillColor = Color
@@ -545,6 +598,46 @@ local function UpdatePlayerESP()
                 Data.Label.TextColor3 = Color
             end
         end
+    end
+end
+
+local function UpdateGunESP()
+    if not Settings.ESPGun then
+        ClearGunESP()
+        return
+    end
+    local GunPart = nil
+    for _, Obj in ipairs(workspace:GetDescendants()) do
+        if (Obj.Name == "Gun" or Obj.Name == "DroppedGun") and (Obj:IsA("BasePart") or Obj:IsA("Tool")) then
+            local isEquipped = false
+            for _, Player in ipairs(Players:GetPlayers()) do
+                if Player.Character and Obj:IsDescendantOf(Player.Character) then
+                    isEquipped = true
+                    break
+                end
+            end
+            if not isEquipped then
+                GunPart = Obj
+                break
+            end
+        end
+    end
+
+    if GunPart then
+        if not ESPGunData or ESPGunData.Highlight.Adornee ~= GunPart then
+            ClearGunESP()
+            ESPGunData = CreateGunESP(GunPart)
+        end
+        if not GunNotified then
+            StarterGui:SetCore("SendNotification", {
+                Title = "Gun Dropped",
+                Text = "The Sheriff's gun has been dropped!",
+                Duration = 5
+            })
+            GunNotified = true
+        end
+    else
+        ClearGunESP()
     end
 end
 
@@ -558,7 +651,7 @@ ScreenGui.DisplayOrder = 999
 ScreenGui.Parent = PlayerGui
 
 local MainFrame = Instance.new("Frame")
-MainFrame.Size = UDim2.new(0, 360, 0, 440)
+MainFrame.Size = UDim2.new(0, 360, 0, 480)
 MainFrame.Position = UDim2.new(0, 50, 0, 100)
 MainFrame.BackgroundColor3 = Color3.fromRGB(18, 20, 28)
 MainFrame.BorderSizePixel = 0
@@ -753,9 +846,20 @@ ESPPlayerButton.TextSize = 11
 ESPPlayerButton.Parent = MainFrame
 Instance.new("UICorner", ESPPlayerButton).CornerRadius = UDim.new(0, 5)
 
+local ESPGunButton = Instance.new("TextButton")
+ESPGunButton.Size = UDim2.new(1, -24, 0, 30)
+ESPGunButton.Position = UDim2.new(0, 12, 0, 328)
+ESPGunButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ESPGunButton.Text = "ESP DROPPED GUN: OFF"
+ESPGunButton.TextColor3 = Color3.new(1, 1, 1)
+ESPGunButton.Font = Enum.Font.Gotham
+ESPGunButton.TextSize = 11
+ESPGunButton.Parent = MainFrame
+Instance.new("UICorner", ESPGunButton).CornerRadius = UDim.new(0, 5)
+
 local ServerHopButton = Instance.new("TextButton")
 ServerHopButton.Size = UDim2.new(1, -24, 0, 30)
-ServerHopButton.Position = UDim2.new(0, 12, 0, 328)
+ServerHopButton.Position = UDim2.new(0, 12, 0, 368)
 ServerHopButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
 ServerHopButton.Text = "SERVER HOP"
 ServerHopButton.TextColor3 = Color3.new(1, 1, 1)
@@ -764,7 +868,7 @@ ServerHopButton.TextSize = 12
 ServerHopButton.Parent = MainFrame
 Instance.new("UICorner", ServerHopButton).CornerRadius = UDim.new(0, 5)
 
-local StatusLabel = MakeLabel("Waiting...", 370, Color3.fromRGB(150, 160, 190))
+local StatusLabel = MakeLabel("Waiting...", 410, Color3.fromRGB(150, 160, 190))
 
 local function SetModeVisual(Mode)
     local Selected = Color3.fromRGB(0, 120, 255)
@@ -836,6 +940,13 @@ ESPPlayerButton.MouseButton1Click:Connect(function()
     SaveConfig()
 end)
 
+ESPGunButton.MouseButton1Click:Connect(function()
+    Settings.ESPGun = not Settings.ESPGun
+    ESPGunButton.Text = "ESP DROPPED GUN: " .. (Settings.ESPGun and "ON" or "OFF")
+    if not Settings.ESPGun then ClearGunESP() end
+    SaveConfig()
+end)
+
 ServerHopButton.MouseButton1Click:Connect(function()
     ServerHop()
 end)
@@ -848,6 +959,7 @@ SetMode(Settings.Mode)
 
 if Settings.ESPCoins then ESPCoinButton.Text = "ESP COINS: ON" end
 if Settings.ESPPlayers then ESPPlayerButton.Text = "ESP ROLES: ON" end
+if Settings.ESPGun then ESPGunButton.Text = "ESP DROPPED GUN: ON" end
 if Settings.AutoFarm then task.spawn(StartAutoFarm) end
 
 RunService.RenderStepped:Connect(function(DeltaTime)
@@ -876,6 +988,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         LastESPUpdate = Now
         UpdateCoinESP()
         UpdatePlayerESP()
+        UpdateGunESP()
     end
 
     if Now - LastServerHopCheck > 5 then
@@ -922,14 +1035,12 @@ RunService.RenderStepped:Connect(function(DeltaTime)
         if Distance > 6 then
             local Direction = (Nearest.Position - HRP.Position).Unit
             if Distance > SafeDistance then
-                HRP.Velocity = Direction * Settings.MaxSpeed
+                HRP.CFrame = CFrame.new(HRP.Position + Direction * Settings.MaxSpeed * DeltaTime)
                 StatusLabel.Text = string.format("Fly -> %.0f studs", Distance)
             else
-                HRP.Velocity = Vector3.zero
                 StatusLabel.Text = "Maintaining distance..."
             end
         else
-            HRP.Velocity = Vector3.zero
             local Spin = tick() * 6
             local Bob = math.sin(tick() * 4) * 1.5
             HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
@@ -947,7 +1058,7 @@ RunService.RenderStepped:Connect(function(DeltaTime)
                 HRP.Velocity = Vector3.zero
                 HRP.CFrame = CFrame.new(Nearest.Position + Offset)
             end
-            StatusLabel.Text = string.format("TP -> %.0f studs (%.1fs)", Distance, Settings.TPValidationDelay)
+            StatusLabel.Text = string.format("TP -> %.0f studs (%.2fs)", Distance, Settings.TPValidationDelay)
         else
             HRP.Velocity = Vector3.zero
             local Spin = tick() * 6
@@ -958,9 +1069,27 @@ RunService.RenderStepped:Connect(function(DeltaTime)
 
     elseif Settings.Mode == "Walk" then
         Hum.PlatformStand = false
-        Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 100)
+        Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 50)
         workspace.Gravity = 196.2
         SetNoclip(true)
+
+        local Murder = nil
+        for _, Player in ipairs(Players:GetPlayers()) do
+            if Player ~= LocalPlayer and GetPlayerRole(Player) == "Murderer" then
+                Murder = Player
+                break
+            end
+        end
+        if Murder and Murder.Character then
+            local MurderHRP = Murder.Character:FindFirstChild("HumanoidRootPart")
+            if MurderHRP and (MurderHRP.Position - HRP.Position).Magnitude < 50 then
+                local FleeDir = (HRP.Position - MurderHRP.Position).Unit
+                HRP.CFrame = HRP.CFrame + FleeDir * 50 * DeltaTime
+                StatusLabel.Text = "Fleeing from Murderer!"
+                return
+            end
+        end
+
         if Distance > 6 then
             if Distance < 25 then
                 Hum:MoveTo(Nearest.Position)
