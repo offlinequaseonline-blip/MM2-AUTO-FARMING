@@ -26,11 +26,17 @@ local FLY_SPEED = 50
 local FLEE_DIST = 60
 local SAFE_DIST = 100
 local SAFE_TIME = 2
-local VOID_Y = -15
+local VOID_Y = -25
 local UNDERGROUND_DEPTH = 100
 local BAG_THRESHOLD = 50
 local ALONE_TIMEOUT = 20
-local FLY_TIMEOUT = 5
+local FLY_TIMEOUT = 6
+local GUN_TIMEOUT = 6
+local MAX_FLY_DIST = 400
+local FAILSAFE_DIST = 500
+local PATH_FAIL_LIMIT = 3
+local STUCK_TIME_LIMIT = 3
+local BAD_COIN_COOLDOWN = 30
 
 local Settings = { AutoFarm = false, ESPCoins = false }
 
@@ -43,14 +49,17 @@ local LastCacheUpdate = 0
 local LastTargetRefresh = 0
 local LastPos = Vector3.zero
 local LastPosTime = 0
+local LastFailsafe = 0
 local AloneStartTime = nil
 local WalkPath = nil
 local WalkIndex = 1
+local PathFailCount = 0
 local LocalBagCoins = 0
 local HasActivatedFullBagAction = false
 local HasShotMurder = false
 local HasKilledAll = false
 local GunPickupTarget = nil
+local GunPickupStart = 0
 local MapCenter = nil
 local CachedCoins = {}
 local CachedMurderer = nil
@@ -60,6 +69,7 @@ local SafeSince = nil
 local FlyToCoinTarget = nil
 local FlyToCoinStart = 0
 local StuckStart = nil
+local BadCoins = {}
 
 local ESPCoinData = {}
 
@@ -106,8 +116,28 @@ local function GetCharacter() return LocalPlayer.Character end
 local function GetHRP() local c = GetCharacter(); return c and c:FindFirstChild("HumanoidRootPart") end
 local function GetHumanoid() local c = GetCharacter(); return c and c:FindFirstChildOfClass("Humanoid") end
 
+local function IsInCharacter(Obj)
+    local a = Obj.Parent
+    while a do
+        if a:IsA("Model") and a:FindFirstChildOfClass("Humanoid") then return true end
+        if a:IsA("Backpack") then return true end
+        if a == workspace then return false end
+        a = a.Parent
+    end
+    return false
+end
+
 local function IsCoin(Obj)
-    return Obj:IsA("BasePart") and (Obj.Name:match("Coin") or Obj.Name:match("Candy") or Obj.Name:match("Treat")) and Obj.Transparency < 1
+    if not Obj:IsA("BasePart") then return false end
+    if Obj.Transparency >= 1 then return false end
+    local n = Obj.Name
+    if not (n:match("^Coin") or n:match("^Candy") or n:match("^Treat")) then return false end
+    if n:match("Spawn") or n:match("Sign") or n:match("Board") or n:match("Point") or n:match("Decal") or n:match("Gui") then
+        return false
+    end
+    if Obj.Size.Magnitude > 25 then return false end
+    if IsInCharacter(Obj) then return false end
+    return true
 end
 
 local function ApplyNoclip()
@@ -163,14 +193,23 @@ local function UpdateCache()
             n = n + 1
         end
     end
-    MapCenter = n > 0 and (sum / n) or nil
+    if n > 0 then MapCenter = sum / n else MapCenter = nil end
 
     CachedMurderer = nil
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
-            if p.Character:FindFirstChild("Knife") then CachedMurderer = p; break end
-            local bp = p:FindFirstChild("Backpack")
-            if bp and bp:FindFirstChild("Knife") then CachedMurderer = p; break end
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                if p.Character:FindFirstChild("Knife") then CachedMurderer = p; break end
+                local bp = p:FindFirstChild("Backpack")
+                if bp and bp:FindFirstChild("Knife") then CachedMurderer = p; break end
+            end
+        end
+    end
+
+    for c, t in pairs(BadCoins) do
+        if tick() - t > BAD_COIN_COOLDOWN or not c.Parent then
+            BadCoins[c] = nil
         end
     end
 end
@@ -192,6 +231,8 @@ local function IsPlaying()
         HasShotMurder = false
         HasKilledAll = false
         WalkPath = nil
+        PathFailCount = 0
+        StuckStart = nil
         return false
     end
     if tick() - CharChangedAt < 2 then return false end
@@ -269,14 +310,17 @@ end
 
 local function FindDroppedGun()
     for _, o in ipairs(workspace:GetDescendants()) do
-        if (o.Name == "Gun" or o.Name == "DroppedGun") and (o:IsA("Tool") or o:IsA("BasePart")) then
-            local owned = false
-            for _, p in ipairs(Players:GetPlayers()) do
-                if p.Character and o:IsDescendantOf(p.Character) then owned = true; break end
-                local bp = p:FindFirstChild("Backpack")
-                if bp and o:IsDescendantOf(bp) then owned = true; break end
+        if o:IsA("Tool") and (o.Name == "Gun" or o.Name == "DroppedGun") then
+            local handle = o:FindFirstChild("Handle")
+            if handle and handle:IsA("BasePart") then
+                local owned = false
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p.Character and o:IsDescendantOf(p.Character) then owned = true; break end
+                    local bp = p:FindFirstChild("Backpack")
+                    if bp and o:IsDescendantOf(bp) then owned = true; break end
+                end
+                if not owned then return o end
             end
-            if not owned then return o end
         end
     end
     return nil
@@ -348,7 +392,7 @@ local function GetBestCoin(HRP, Murderer)
     end
     local best, bestScore = nil, -math.huge
     for _, o in ipairs(CachedCoins) do
-        if o.Parent then
+        if o.Parent and not BadCoins[o] then
             local score = -(o.Position - myPos).Magnitude * 0.3
             if mPos then
                 score = score + (o.Position - mPos).Magnitude * 0.7
@@ -592,8 +636,9 @@ local function SetFarmButton(on)
     end
 end
 
-local function ResetFarmRuntime()
+local function ResetRuntime()
     WalkPath = nil
+    PathFailCount = 0
     GunPickupTarget = nil
     UnderCoin = nil
     UndergroundPhase = nil
@@ -603,6 +648,7 @@ local function ResetFarmRuntime()
     HasActivatedFullBagAction = false
     HasShotMurder = false
     HasKilledAll = false
+    LastPos = Vector3.zero
 end
 
 FarmBtn.MouseButton1Click:Connect(function()
@@ -612,10 +658,10 @@ FarmBtn.MouseButton1Click:Connect(function()
         FarmState = "Idle"
         DisableFly()
         DisableNoclip()
-        ResetFarmRuntime()
+        ResetRuntime()
     else
         FarmState = "WaitingMatch"
-        ResetFarmRuntime()
+        ResetRuntime()
     end
     SaveConfig()
 end)
@@ -654,7 +700,7 @@ local function HandleFlyingToMap(dt)
     EnableFly()
     local target, bestDist = nil, math.huge
     for _, o in ipairs(CachedCoins) do
-        if o.Parent then
+        if o.Parent and not BadCoins[o] then
             local d = (o.Position - HRP.Position).Magnitude
             if d < bestDist then target = o.Position; bestDist = d end
         end
@@ -664,9 +710,10 @@ local function HandleFlyingToMap(dt)
     local dist = FlyTowards(HRP, target, dt)
     StatusLbl.Text = string.format("Flying to map: %.0f", dist)
     if dist < 15 then
-        FarmState = "Farming"
         DisableFly()
-        StatusLbl.Text = "Farming!"
+        FarmState = "Farming"
+        LastPos = HRP.Position
+        StuckStart = nil
     end
 end
 
@@ -682,19 +729,30 @@ local function HandleFarming(dt)
     ApplyNoclip()
 
     local m = CachedMurderer
-    local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
+    local mHRP = nil
+    if m and m.Character then
+        mHRP = m.Character:FindFirstChild("HumanoidRootPart")
+    end
 
-    if mHRP and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
-        FarmState = "FleeingUnderground"
-        SafeSince = nil
-        StatusLbl.Text = "Fleeing underground!"
-        return
+    -- Flee check: murder must be alive, close, and actually present
+    if mHRP and mHRP.Parent then
+        local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+        if mHum and mHum.Health > 0 then
+            local md = (mHRP.Position - HRP.Position).Magnitude
+            if md < FLEE_DIST then
+                FarmState = "FleeingUnderground"
+                SafeSince = nil
+                StatusLbl.Text = string.format("Fleeing! (%.0f)", md)
+                return
+            end
+        end
     end
 
     if GetLocalRole() == "Innocent" and not GetMyTool("gun") then
         local gun = FindDroppedGun()
         if gun then
             GunPickupTarget = gun
+            GunPickupStart = tick()
             FarmState = "PickingGun"
             StatusLbl.Text = "Picking up gun!"
             return
@@ -705,19 +763,6 @@ local function HandleFarming(dt)
     if not target then StatusLbl.Text = "No coins"; return end
 
     local dist = (target.Position - HRP.Position).Magnitude
-    local yDiff = math.abs(target.Position.Y - HRP.Position.Y)
-    local mapY = MapCenter and MapCenter.Y or 0
-    local coinUnderground = target.Position.Y < (mapY - 30)
-    local coinTooHigh = target.Position.Y > (mapY + 60)
-
-    -- Se a moeda está muito abaixo do mapa OU muito acima, ela não é alcançável andando
-    if coinUnderground or coinTooHigh then
-        FlyToCoinTarget = target
-        FlyToCoinStart = tick()
-        FarmState = "FlyingToCoin"
-        StatusLbl.Text = "Coin unreachable by walk, flying!"
-        return
-    end
 
     if dist > 6 then
         if dist > 25 then
@@ -727,9 +772,31 @@ local function HandleFarming(dt)
                     AgentHeight = 5, AgentRadius = 2, AgentCanJump = false, WaypointSpacing = 4
                 })
                 local ok = pcall(function() WalkPath:ComputeAsync(HRP.Position, target.Position) end)
-                if not ok or WalkPath.Status ~= Enum.PathStatus.Success then WalkPath = nil end
+                if not ok or WalkPath.Status ~= Enum.PathStatus.Success then
+                    WalkPath = nil
+                    PathFailCount = PathFailCount + 1
+                else
+                    PathFailCount = 0
+                end
                 WalkIndex = 1
             end
+
+            if PathFailCount >= PATH_FAIL_LIMIT then
+                -- Only fly if target is actually far enough and safe
+                if dist < MAX_FLY_DIST then
+                    FlyToCoinTarget = target
+                    FlyToCoinStart = tick()
+                    PathFailCount = 0
+                    FarmState = "FlyingToCoin"
+                    StatusLbl.Text = "Path blocked, flying!"
+                    return
+                else
+                    BadCoins[target] = tick()
+                    StatusLbl.Text = "Coin too far, skipping"
+                    return
+                end
+            end
+
             if WalkPath then
                 local wps = WalkPath:GetWaypoints()
                 if WalkIndex <= #wps then
@@ -739,22 +806,12 @@ local function HandleFarming(dt)
                         wp = wps[math.min(WalkIndex, #wps)]
                     end
                     Hum:MoveTo(wp.Position)
-                    if math.abs(HRP.Position.Y - wp.Position.Y) > 2 then
-                        HRP.CFrame = CFrame.new(HRP.Position.X, wp.Position.Y + 1, HRP.Position.Z)
-                    end
                 end
             else
-                FlyToCoinTarget = target
-                FlyToCoinStart = tick()
-                FarmState = "FlyingToCoin"
-                StatusLbl.Text = "Path failed, flying!"
-                return
+                Hum:MoveTo(target.Position)
             end
         else
             Hum:MoveTo(target.Position)
-            if yDiff > 2 then
-                HRP.CFrame = CFrame.new(HRP.Position.X, target.Position.Y + 1, HRP.Position.Z)
-            end
         end
     else
         HRP.CFrame = CFrame.new(target.Position + Vector3.new(0, 2, 0))
@@ -762,21 +819,33 @@ local function HandleFarming(dt)
 
     StatusLbl.Text = string.format("Farm -> %.0f", dist)
 
-    -- Detecção de travamento: se não moveu 2s, entra em fly
-    if (HRP.Position - LastPos).Magnitude < 0.5 then
-        if not StuckStart then StuckStart = tick() end
-        if tick() - StuckStart > 2 then
-            FlyToCoinTarget = target
-            FlyToCoinStart = tick()
+    -- Stuck detection ONLY if genuinely far from target (not already on it)
+    if dist > 12 then
+        if (HRP.Position - LastPos).Magnitude < 0.5 then
+            if not StuckStart then StuckStart = tick() end
+            if tick() - StuckStart > STUCK_TIME_LIMIT then
+                if dist < MAX_FLY_DIST then
+                    FlyToCoinTarget = target
+                    FlyToCoinStart = tick()
+                    StuckStart = nil
+                    FarmState = "FlyingToCoin"
+                    StatusLbl.Text = "Stuck, flying!"
+                    return
+                else
+                    BadCoins[target] = tick()
+                    StuckStart = nil
+                    StatusLbl.Text = "Coin too far, skipping"
+                    return
+                end
+            end
+        else
             StuckStart = nil
-            FarmState = "FlyingToCoin"
-            StatusLbl.Text = "Stuck, flying to coin!"
-            return
+            LastPos = HRP.Position
+            LastPosTime = tick()
         end
     else
         StuckStart = nil
         LastPos = HRP.Position
-        LastPosTime = tick()
     end
 end
 
@@ -786,24 +855,38 @@ local function HandleFlyingToCoin(dt)
     EnableFly()
 
     if not FlyToCoinTarget or not FlyToCoinTarget.Parent then
+        BadCoins[FlyToCoinTarget] = tick()
         FlyToCoinTarget = nil
-        FarmState = "Farming"
+        FarmState = "ReturningToSurface"
+        return
+    end
+
+    local realDist = (FlyToCoinTarget.Position - HRP.Position).Magnitude
+    if realDist > MAX_FLY_DIST then
+        BadCoins[FlyToCoinTarget] = tick()
+        FlyToCoinTarget = nil
+        FarmState = "ReturningToSurface"
+        StatusLbl.Text = "Coin too far, aborting"
         return
     end
 
     if tick() - FlyToCoinStart > FLY_TIMEOUT then
+        BadCoins[FlyToCoinTarget] = tick()
         FlyToCoinTarget = nil
-        FarmState = "Farming"
-        StatusLbl.Text = "Fly timeout, back to farming"
+        FarmState = "ReturningToSurface"
+        StatusLbl.Text = "Fly timeout"
         return
     end
 
     local m = CachedMurderer
     local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
-    if mHRP and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
-        FlyToCoinTarget = nil
-        FarmState = "FleeingUnderground"
-        return
+    if mHRP then
+        local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+        if mHum and mHum.Health > 0 and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
+            FlyToCoinTarget = nil
+            FarmState = "FleeingUnderground"
+            return
+        end
     end
 
     local targetPos = FlyToCoinTarget.Position + Vector3.new(0, 2, 0)
@@ -814,9 +897,7 @@ local function HandleFlyingToCoin(dt)
         HRP.Velocity = Vector3.zero
         HRP.CFrame = CFrame.new(targetPos)
         FlyToCoinTarget = nil
-        task.delay(0.3, function()
-            if FarmState == "FlyingToCoin" then FarmState = "Farming" end
-        end)
+        FarmState = "ReturningToSurface"
     end
 end
 
@@ -828,40 +909,54 @@ local function HandleFleeingUnderground(dt)
     local mapY = MapCenter and MapCenter.Y or 0
     local undergroundY = mapY - UNDERGROUND_DEPTH
     local m = CachedMurderer
-    local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
+    local mHRP = nil
+    if m and m.Character then
+        mHRP = m.Character:FindFirstChild("HumanoidRootPart")
+    end
 
     local target, bestScore = nil, -math.huge
     for _, o in ipairs(CachedCoins) do
-        if o.Parent then
+        if o.Parent and not BadCoins[o] then
             local score = 0
             if mHRP then score = (o.Position - mHRP.Position).Magnitude end
             score = score - (o.Position - HRP.Position).Magnitude * 0.3
             if score > bestScore then target = o; bestScore = score end
         end
     end
-    if not target then StatusLbl.Text = "No coins underground"; return end
 
-    local targetPos = Vector3.new(target.Position.X, undergroundY, target.Position.Z)
-    local dist = FlyTowards(HRP, targetPos, dt)
-    StatusLbl.Text = string.format("Underground -> %.0f", dist)
-
-    if dist < 10 then
-        UnderCoin = target
-        UndergroundPhase = "rising"
-        FarmState = "GrabbingUnderground"
-        return
+    if target then
+        local targetPos = Vector3.new(target.Position.X, undergroundY, target.Position.Z)
+        local dist = FlyTowards(HRP, targetPos, dt)
+        StatusLbl.Text = string.format("Underground -> %.0f", dist)
+        if dist < 10 then
+            UnderCoin = target
+            UndergroundPhase = "rising"
+            FarmState = "GrabbingUnderground"
+            return
+        end
+    else
+        -- No valid coin, just stay underground safe
+        local safeY = undergroundY
+        FlyTowards(HRP, Vector3.new(HRP.Position.X, safeY, HRP.Position.Z), dt)
+        StatusLbl.Text = "No coins, staying safe"
     end
 
+    -- Exit condition: murderer is dead OR far away for 2s
+    local md = math.huge
     if mHRP then
-        if HorizontalDist(mHRP, HRP) > SAFE_DIST then
-            if not SafeSince then SafeSince = tick() end
-            if tick() - SafeSince > SAFE_TIME then
-                FarmState = "ReturningToSurface"
-                SafeSince = nil
-            end
-        else
+        local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+        if mHum and mHum.Health > 0 then
+            md = HorizontalDist(mHRP, HRP)
+        end
+    end
+    if md > SAFE_DIST then
+        if not SafeSince then SafeSince = tick() end
+        if tick() - SafeSince > SAFE_TIME then
+            FarmState = "ReturningToSurface"
             SafeSince = nil
         end
+    else
+        SafeSince = nil
     end
 end
 
@@ -882,7 +977,7 @@ local function HandleGrabbingUnderground(dt)
     if UndergroundPhase == "rising" then
         local targetPos = UnderCoin.Position + Vector3.new(0, 2, 0)
         local dist = FlyTowards(HRP, targetPos, dt)
-        StatusLbl.Text = string.format("Rising to grab: %.0f", dist)
+        StatusLbl.Text = string.format("Rising: %.0f", dist)
         if dist < 3 then
             UndergroundPhase = "grabbing"
             task.delay(0.3, function()
@@ -895,16 +990,19 @@ local function HandleGrabbingUnderground(dt)
     elseif UndergroundPhase == "diving" then
         local targetPos = Vector3.new(HRP.Position.X, undergroundY, HRP.Position.Z)
         local dist = FlyTowards(HRP, targetPos, dt)
-        StatusLbl.Text = "Diving back down..."
+        StatusLbl.Text = "Diving..."
         if dist < 5 then
             UnderCoin = nil; UndergroundPhase = nil
             local m = CachedMurderer
             local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
-            if mHRP and HorizontalDist(mHRP, HRP) < FLEE_DIST then
-                FarmState = "FleeingUnderground"
-            else
-                FarmState = "ReturningToSurface"
+            if mHRP then
+                local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+                if mHum and mHum.Health > 0 and HorizontalDist(mHRP, HRP) < FLEE_DIST then
+                    FarmState = "FleeingUnderground"
+                    return
+                end
             end
+            FarmState = "ReturningToSurface"
         end
     end
 end
@@ -917,17 +1015,22 @@ local function HandleReturningToSurface(dt)
     local surfaceY = mapY + 5
     local targetPos = Vector3.new(HRP.Position.X, surfaceY, HRP.Position.Z)
     local dist = FlyTowards(HRP, targetPos, dt)
-    StatusLbl.Text = string.format("Returning to surface: %.0f", dist)
+    StatusLbl.Text = string.format("Surfacing: %.0f", dist)
 
     local m = CachedMurderer
     local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
-    if mHRP and HorizontalDist(mHRP, HRP) < FLEE_DIST then
-        FarmState = "FleeingUnderground"
-        return
+    if mHRP then
+        local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+        if mHum and mHum.Health > 0 and HorizontalDist(mHRP, HRP) < FLEE_DIST then
+            FarmState = "FleeingUnderground"
+            return
+        end
     end
     if dist < 3 then
         DisableFly()
         FarmState = "Farming"
+        LastPos = HRP.Position
+        StuckStart = nil
     end
 end
 
@@ -937,6 +1040,12 @@ local function HandlePickingGun(dt)
 
     if not GunPickupTarget or not GunPickupTarget.Parent then
         GunPickupTarget = nil; FarmState = "Farming"; return
+    end
+
+    if tick() - GunPickupStart > GUN_TIMEOUT then
+        GunPickupTarget = nil; FarmState = "Farming"
+        StatusLbl.Text = "Gun timeout"
+        return
     end
 
     local owned = false
@@ -951,8 +1060,11 @@ local function HandlePickingGun(dt)
 
     local m = CachedMurderer
     local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
-    if mHRP and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
-        GunPickupTarget = nil; FarmState = "FleeingUnderground"; return
+    if mHRP then
+        local mHum = m.Character:FindFirstChildOfClass("Humanoid")
+        if mHum and mHum.Health > 0 and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
+            GunPickupTarget = nil; FarmState = "FleeingUnderground"; return
+        end
     end
 
     EnableFly()
@@ -990,11 +1102,27 @@ RunService.RenderStepped:Connect(function(dt)
     if not Settings.AutoFarm then return end
     if not HRP then return end
 
+    -- GLOBAL FAILSAFE: if we're super far from map, teleport back
+    if tick() - LastFailsafe > 3 then
+        LastFailsafe = tick()
+        if MapCenter and (HRP.Position - MapCenter).Magnitude > FAILSAFE_DIST then
+            HRP.CFrame = CFrame.new(MapCenter + Vector3.new(0, 20, 0))
+            StatusLbl.Text = "Failsafe teleport!"
+            return
+        end
+        if not MapCenter and HRP.Position.Y < -200 then
+            HRP.CFrame = CFrame.new(HRP.Position.X, 50, HRP.Position.Z)
+            StatusLbl.Text = "Failsafe void rescue!"
+            return
+        end
+    end
+
+    -- Void rescue (only when NOT in underground states)
     local inUnderground = FarmState == "FleeingUnderground" or FarmState == "GrabbingUnderground"
     if not inUnderground and HRP.Position.Y < VOID_Y then
         EnableFly()
-        local safe = MapCenter or Vector3.new(0, 50, 0)
-        FlyTowards(HRP, Vector3.new(safe.X, safe.Y + 30, safe.Z), dt)
+        local safeY = (MapCenter and MapCenter.Y or 5) + 30
+        FlyTowards(HRP, Vector3.new(HRP.Position.X, safeY, HRP.Position.Z), dt)
         StatusLbl.Text = "Void rescue!"
         return
     end
@@ -1017,6 +1145,7 @@ RunService.RenderStepped:Connect(function(dt)
                 ShootMurderer()
             elseif FindDroppedGun() then
                 GunPickupTarget = FindDroppedGun()
+                GunPickupStart = tick()
                 FarmState = "PickingGun"
             else
                 FlingMurderer()
