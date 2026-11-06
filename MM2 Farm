@@ -30,6 +30,7 @@ local VOID_Y = -15
 local UNDERGROUND_DEPTH = 100
 local BAG_THRESHOLD = 50
 local ALONE_TIMEOUT = 20
+local FLY_TIMEOUT = 5
 
 local Settings = { AutoFarm = false, ESPCoins = false }
 
@@ -56,6 +57,9 @@ local CachedMurderer = nil
 local UnderCoin = nil
 local UndergroundPhase = nil
 local SafeSince = nil
+local FlyToCoinTarget = nil
+local FlyToCoinStart = 0
+local StuckStart = nil
 
 local ESPCoinData = {}
 
@@ -588,6 +592,19 @@ local function SetFarmButton(on)
     end
 end
 
+local function ResetFarmRuntime()
+    WalkPath = nil
+    GunPickupTarget = nil
+    UnderCoin = nil
+    UndergroundPhase = nil
+    SafeSince = nil
+    FlyToCoinTarget = nil
+    StuckStart = nil
+    HasActivatedFullBagAction = false
+    HasShotMurder = false
+    HasKilledAll = false
+end
+
 FarmBtn.MouseButton1Click:Connect(function()
     Settings.AutoFarm = not Settings.AutoFarm
     SetFarmButton(Settings.AutoFarm)
@@ -595,21 +612,10 @@ FarmBtn.MouseButton1Click:Connect(function()
         FarmState = "Idle"
         DisableFly()
         DisableNoclip()
-        GunPickupTarget = nil
-        UnderCoin = nil
-        UndergroundPhase = nil
-        SafeSince = nil
-        WalkPath = nil
+        ResetFarmRuntime()
     else
         FarmState = "WaitingMatch"
-        GunPickupTarget = nil
-        UnderCoin = nil
-        UndergroundPhase = nil
-        SafeSince = nil
-        WalkPath = nil
-        HasActivatedFullBagAction = false
-        HasShotMurder = false
-        HasKilledAll = false
+        ResetFarmRuntime()
     end
     SaveConfig()
 end)
@@ -626,7 +632,7 @@ HopBtn.MouseButton1Click:Connect(ServerHop)
 if Settings.AutoFarm then SetFarmButton(true); FarmState = "WaitingMatch" end
 if Settings.ESPCoins then ESPBtn.Text = "ESP COINS: ON" end
 
--- State handlers
+-- ===================== STATE HANDLERS =====================
 
 local function HandleWaitingMatch(dt)
     local HRP, Hum = GetHRP(), GetHumanoid()
@@ -699,6 +705,20 @@ local function HandleFarming(dt)
     if not target then StatusLbl.Text = "No coins"; return end
 
     local dist = (target.Position - HRP.Position).Magnitude
+    local yDiff = math.abs(target.Position.Y - HRP.Position.Y)
+    local mapY = MapCenter and MapCenter.Y or 0
+    local coinUnderground = target.Position.Y < (mapY - 30)
+    local coinTooHigh = target.Position.Y > (mapY + 60)
+
+    -- Se a moeda está muito abaixo do mapa OU muito acima, ela não é alcançável andando
+    if coinUnderground or coinTooHigh then
+        FlyToCoinTarget = target
+        FlyToCoinStart = tick()
+        FarmState = "FlyingToCoin"
+        StatusLbl.Text = "Coin unreachable by walk, flying!"
+        return
+    end
+
     if dist > 6 then
         if dist > 25 then
             if not WalkPath or (tick() - LastTargetRefresh > 2) then
@@ -724,14 +744,15 @@ local function HandleFarming(dt)
                     end
                 end
             else
-                Hum:MoveTo(target.Position)
-                if math.abs(HRP.Position.Y - target.Position.Y) > 2 then
-                    HRP.CFrame = CFrame.new(HRP.Position.X, target.Position.Y + 1, HRP.Position.Z)
-                end
+                FlyToCoinTarget = target
+                FlyToCoinStart = tick()
+                FarmState = "FlyingToCoin"
+                StatusLbl.Text = "Path failed, flying!"
+                return
             end
         else
             Hum:MoveTo(target.Position)
-            if math.abs(HRP.Position.Y - target.Position.Y) > 2 then
+            if yDiff > 2 then
                 HRP.CFrame = CFrame.new(HRP.Position.X, target.Position.Y + 1, HRP.Position.Z)
             end
         end
@@ -741,14 +762,61 @@ local function HandleFarming(dt)
 
     StatusLbl.Text = string.format("Farm -> %.0f", dist)
 
+    -- Detecção de travamento: se não moveu 2s, entra em fly
     if (HRP.Position - LastPos).Magnitude < 0.5 then
-        if tick() - LastPosTime > 1.5 then
-            HRP.CFrame = CFrame.new(HRP.Position.X, HRP.Position.Y + 3, HRP.Position.Z)
-            LastPosTime = tick()
+        if not StuckStart then StuckStart = tick() end
+        if tick() - StuckStart > 2 then
+            FlyToCoinTarget = target
+            FlyToCoinStart = tick()
+            StuckStart = nil
+            FarmState = "FlyingToCoin"
+            StatusLbl.Text = "Stuck, flying to coin!"
+            return
         end
     else
+        StuckStart = nil
         LastPos = HRP.Position
         LastPosTime = tick()
+    end
+end
+
+local function HandleFlyingToCoin(dt)
+    local HRP, Hum = GetHRP(), GetHumanoid()
+    if not HRP or not Hum or Hum.Health <= 0 then return end
+    EnableFly()
+
+    if not FlyToCoinTarget or not FlyToCoinTarget.Parent then
+        FlyToCoinTarget = nil
+        FarmState = "Farming"
+        return
+    end
+
+    if tick() - FlyToCoinStart > FLY_TIMEOUT then
+        FlyToCoinTarget = nil
+        FarmState = "Farming"
+        StatusLbl.Text = "Fly timeout, back to farming"
+        return
+    end
+
+    local m = CachedMurderer
+    local mHRP = m and m.Character and m.Character:FindFirstChild("HumanoidRootPart")
+    if mHRP and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
+        FlyToCoinTarget = nil
+        FarmState = "FleeingUnderground"
+        return
+    end
+
+    local targetPos = FlyToCoinTarget.Position + Vector3.new(0, 2, 0)
+    local dist = FlyTowards(HRP, targetPos, dt)
+    StatusLbl.Text = string.format("Flying to coin: %.0f", dist)
+
+    if dist < 3 then
+        HRP.Velocity = Vector3.zero
+        HRP.CFrame = CFrame.new(targetPos)
+        FlyToCoinTarget = nil
+        task.delay(0.3, function()
+            if FarmState == "FlyingToCoin" then FarmState = "Farming" end
+        end)
     end
 end
 
@@ -959,6 +1027,7 @@ RunService.RenderStepped:Connect(function(dt)
     if FarmState == "WaitingMatch" then HandleWaitingMatch(dt)
     elseif FarmState == "FlyingToMap" then HandleFlyingToMap(dt)
     elseif FarmState == "Farming" then HandleFarming(dt)
+    elseif FarmState == "FlyingToCoin" then HandleFlyingToCoin(dt)
     elseif FarmState == "FleeingUnderground" then HandleFleeingUnderground(dt)
     elseif FarmState == "GrabbingUnderground" then HandleGrabbingUnderground(dt)
     elseif FarmState == "ReturningToSurface" then HandleReturningToSurface(dt)
