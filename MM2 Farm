@@ -13,7 +13,6 @@ local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local VirtualUser = game:GetService("VirtualUser")
-local PathfindingService = game:GetService("PathfindingService")
 local TeleportService = game:GetService("TeleportService")
 local HttpService = game:GetService("HttpService")
 
@@ -28,12 +27,16 @@ local VOID_Y = -25
 local BAG_THRESHOLD = 50
 local ALONE_TIMEOUT = 20
 local GUN_TIMEOUT = 8
-local PATH_FAIL_LIMIT = 4
 local STUCK_TIME_LIMIT = 4
 local BAD_COIN_COOLDOWN = 30
 local FLY_MAP_TIMEOUT = 20
 local NO_COIN_TIMEOUT = 6
 local FAILSAFE_DIST = 500
+local Y_FAILSAFE_ABOVE = 30
+local Y_HARD_CAP = 80
+local MAX_COIN_ABOVE = 6
+local MAX_COIN_BELOW = -20
+local Y_CLIMB_RATE = 6
 
 local Settings = { AutoFarm = false, ESPCoins = false }
 
@@ -43,13 +46,9 @@ local CharChangedAt = 0
 local LastESPUpdate = 0
 local LastBagCheck = 0
 local LastCacheUpdate = 0
-local LastTargetRefresh = 0
 local LastPos = Vector3.zero
 local LastFailsafe = 0
 local AloneStartTime = nil
-local WalkPath = nil
-local WalkIndex = 1
-local PathFailCount = 0
 local LocalBagCoins = 0
 local HasActivatedFullBagAction = false
 local HasShotMurder = false
@@ -172,21 +171,52 @@ local function FlyTowards(HRP, target, dt)
     return dist
 end
 
+local function WalkTowardsXZ(HRP, targetPos, dt, speed)
+    local dx = targetPos.X - HRP.Position.X
+    local dz = targetPos.Z - HRP.Position.Z
+    local horiz = math.sqrt(dx * dx + dz * dz)
+    if horiz < 0.3 then return horiz end
+    local step = math.min((speed or WALK_SPEED) * dt, horiz)
+    local ux, uz = dx / horiz, dz / horiz
+    HRP.CFrame = CFrame.new(HRP.Position.X + ux * step, HRP.Position.Y, HRP.Position.Z + uz * step)
+    return horiz
+end
+
 local function UpdateCache()
     local now = tick()
     if now - LastCacheUpdate < 0.2 then return end
     LastCacheUpdate = now
 
-    CachedCoins = {}
-    local sum, n = Vector3.zero, 0
+    local raw = {}
     for _, o in ipairs(workspace:GetDescendants()) do
         if IsCoin(o) and o.Parent then
-            table.insert(CachedCoins, o)
-            sum = sum + o.Position
-            n = n + 1
+            table.insert(raw, o)
         end
     end
-    if n > 0 then MapCenter = sum / n else MapCenter = nil end
+
+    if #raw == 0 then
+        CachedCoins = {}
+        MapCenter = nil
+    else
+        local minY = math.huge
+        for _, o in ipairs(raw) do
+            if o.Position.Y < minY then minY = o.Position.Y end
+        end
+        local filtered = {}
+        for _, o in ipairs(raw) do
+            if o.Position.Y < minY + 50 then
+                table.insert(filtered, o)
+            end
+        end
+        CachedCoins = filtered
+        if #filtered > 0 then
+            local sum = Vector3.zero
+            for _, o in ipairs(filtered) do sum = sum + o.Position end
+            MapCenter = sum / #filtered
+        else
+            MapCenter = nil
+        end
+    end
 
     CachedMurderer = nil
     for _, p in ipairs(Players:GetPlayers()) do
@@ -223,8 +253,6 @@ local function IsPlaying()
         HasActivatedFullBagAction = false
         HasShotMurder = false
         HasKilledAll = false
-        WalkPath = nil
-        PathFailCount = 0
         StuckStart = nil
         return false
     end
@@ -392,21 +420,24 @@ local function GetBestCoin(HRP, Murderer)
     local best, bestScore = nil, -math.huge
     for _, o in ipairs(CachedCoins) do
         if o.Parent and not BadCoins[o] then
-            local score
-            if murdererClose then
-                score = (o.Position - mPos).Magnitude - (o.Position - myPos).Magnitude * 0.15
-            else
-                score = -(o.Position - myPos).Magnitude * 0.3
-                if mPos then
-                    score = score + (o.Position - mPos).Magnitude * 0.7
-                    if MapCenter then
-                        local mSide = mPos - MapCenter
-                        local cSide = o.Position - MapCenter
-                        if mSide:Dot(cSide) < 0 then score = score + 100 end
+            local yDiff = o.Position.Y - myPos.Y
+            if yDiff <= MAX_COIN_ABOVE and yDiff >= MAX_COIN_BELOW then
+                local score
+                if murdererClose then
+                    score = (o.Position - mPos).Magnitude - (o.Position - myPos).Magnitude * 0.15
+                else
+                    score = -(o.Position - myPos).Magnitude * 0.3
+                    if mPos then
+                        score = score + (o.Position - mPos).Magnitude * 0.7
+                        if MapCenter then
+                            local mSide = mPos - MapCenter
+                            local cSide = o.Position - MapCenter
+                            if mSide:Dot(cSide) < 0 then score = score + 100 end
+                        end
                     end
                 end
+                if score > bestScore then best, bestScore = o, score end
             end
-            if score > bestScore then best, bestScore = o, score end
         end
     end
     return best
@@ -635,8 +666,6 @@ local function SetFarmButton(on)
 end
 
 local function ResetRuntime()
-    WalkPath = nil
-    PathFailCount = 0
     GunPickupTarget = nil
     StuckStart = nil
     BadCoins = {}
@@ -683,7 +712,7 @@ local function HandleWaitingMatch(dt)
     if Hum.Health <= 0 then StatusLbl.Text = "Dead, waiting..."; return end
     EnableFly()
     HRP.Velocity = Vector3.zero
-    if IsMatchActive() and tick() - CharChangedAt > 1 then
+    if IsMatchActive() and IsPlaying() and tick() - CharChangedAt > 1 then
         FarmState = "FlyingToMap"
         FlyMapStart = tick()
         StatusLbl.Text = "Match! Flying to map..."
@@ -706,16 +735,23 @@ local function HandleFlyingToMap(dt)
             if d < bestDist then target = o.Position; bestDist = d end
         end
     end
-    if not target then target = MapCenter end
 
     if not target then
         if tick() - FlyMapStart > FLY_MAP_TIMEOUT then
             FarmState = "WaitingMatch"
             FlyMapStart = 0
-            StatusLbl.Text = "No map found, waiting"
+            StatusLbl.Text = "No map found"
             return
         end
         StatusLbl.Text = "Searching map..."
+        return
+    end
+
+    -- Reject suspicious targets (way above or below current pos)
+    if math.abs(target.Y - HRP.Position.Y) > 150 then
+        FarmState = "WaitingMatch"
+        FlyMapStart = 0
+        StatusLbl.Text = "Bad map target, waiting"
         return
     end
 
@@ -734,12 +770,17 @@ local function HandleFarming(dt)
     local HRP, Hum = GetHRP(), GetHumanoid()
     if not HRP or not Hum or Hum.Health <= 0 then return end
 
-    Hum.PlatformStand = false
-    Hum.WalkSpeed = WALK_SPEED
-    Hum.JumpPower = 0
-    Hum.JumpHeight = 0
+    Hum.PlatformStand = true
     workspace.Gravity = 0
     ApplyNoclip()
+
+    -- Y HARD FAILSAFE: if we're way too high above map center, snap down
+    if MapCenter and HRP.Position.Y > MapCenter.Y + Y_HARD_CAP then
+        HRP.CFrame = CFrame.new(HRP.Position.X, MapCenter.Y + 5, HRP.Position.Z)
+        HRP.Velocity = Vector3.zero
+        StatusLbl.Text = "Y hard failsafe!"
+        return
+    end
 
     local m = CachedMurderer
     local mHRP = nil
@@ -754,7 +795,7 @@ local function HandleFarming(dt)
         end
     end
 
-    -- Priority 1: pick up gun if safe and we're innocent without gun
+    -- Gun pickup only if safe
     if GetLocalRole() == "Innocent" and not GetMyTool("gun") then
         local gun = FindDroppedGun()
         if gun then
@@ -762,10 +803,13 @@ local function HandleFarming(dt)
             if handle then
                 local gunSafe = true
                 if mHRP then
-                    local distMurdererToGun = (handle.Position - mHRP.Position).Magnitude
-                    if distMurdererToGun < FLEE_DIST and murdererClose then
+                    if (handle.Position - mHRP.Position).Magnitude < FLEE_DIST and murdererClose then
                         gunSafe = false
                     end
+                end
+                -- Also reject if the gun is far above (unreachable by walk)
+                if handle.Position.Y - HRP.Position.Y > MAX_COIN_ABOVE then
+                    gunSafe = false
                 end
                 if gunSafe then
                     GunPickupTarget = gun
@@ -784,81 +828,45 @@ local function HandleFarming(dt)
         if tick() - NoCoinStart > NO_COIN_TIMEOUT then
             FarmState = "WaitingMatch"
             NoCoinStart = nil
-            WalkPath = nil
-            StatusLbl.Text = "Match ended, waiting"
+            StatusLbl.Text = "Match ended"
             return
         end
-        StatusLbl.Text = "No coins"
+        StatusLbl.Text = "No reachable coins"
         return
     end
     NoCoinStart = nil
 
-    local dist = (target.Position - HRP.Position).Magnitude
+    local yDiff = target.Position.Y - HRP.Position.Y
 
-    if dist > 6 then
-        if dist > 25 then
-            if not WalkPath or (tick() - LastTargetRefresh > 2) then
-                LastTargetRefresh = tick()
-                WalkPath = PathfindingService:CreatePath({
-                    AgentHeight = 5, AgentRadius = 2, AgentCanJump = false, WaypointSpacing = 4
-                })
-                local ok = pcall(function() WalkPath:ComputeAsync(HRP.Position, target.Position) end)
-                if not ok or WalkPath.Status ~= Enum.PathStatus.Success then
-                    WalkPath = nil
-                    PathFailCount = PathFailCount + 1
-                else
-                    PathFailCount = 0
-                end
-                WalkIndex = 1
-            end
-
-            if PathFailCount >= PATH_FAIL_LIMIT then
-                BadCoins[target] = tick()
-                PathFailCount = 0
-                WalkPath = nil
-                StatusLbl.Text = "Coin unreachable, skipping"
-                return
-            end
-
-            if WalkPath then
-                local wps = WalkPath:GetWaypoints()
-                if WalkIndex <= #wps then
-                    local wp = wps[WalkIndex]
-                    if (HRP.Position - wp.Position).Magnitude < 3 then
-                        WalkIndex = WalkIndex + 1
-                        wp = wps[math.min(WalkIndex, #wps)]
-                    end
-                    Hum:MoveTo(wp.Position)
-                    if math.abs(HRP.Position.Y - wp.Position.Y) > 2 then
-                        HRP.CFrame = CFrame.new(HRP.Position.X, wp.Position.Y + 1, HRP.Position.Z)
-                    end
-                end
-            else
-                Hum:MoveTo(target.Position)
-            end
-        else
-            Hum:MoveTo(target.Position)
-            if math.abs(HRP.Position.Y - target.Position.Y) > 2 then
-                HRP.CFrame = CFrame.new(HRP.Position.X, target.Position.Y + 1, HRP.Position.Z)
-            end
+    -- The Y-drift: only small climbs (2-6 studs), max 6 studs/sec
+    if yDiff > 2 and yDiff <= MAX_COIN_ABOVE then
+        local maxStep = math.min(yDiff - 1, Y_CLIMB_RATE * dt)
+        if maxStep > 0.01 then
+            HRP.CFrame = HRP.CFrame + Vector3.new(0, maxStep, 0)
         end
-    else
-        HRP.CFrame = CFrame.new(target.Position + Vector3.new(0, 2, 0))
+    end
+
+    -- Walk horizontally (XZ only) toward the coin
+    local horizDist = WalkTowardsXZ(HRP, target.Position, dt, WALK_SPEED)
+
+    -- Snap XZ when very close (no Y change)
+    if horizDist < 3 then
+        HRP.CFrame = CFrame.new(target.Position.X, HRP.Position.Y, target.Position.Z)
     end
 
     if murdererClose then
-        StatusLbl.Text = string.format("Fleeing coin! (%.0f)", dist)
+        StatusLbl.Text = string.format("Fleeing! -> %.0f", horizDist)
     else
-        StatusLbl.Text = string.format("Farm -> %.0f", dist)
+        StatusLbl.Text = string.format("Farm -> %.0f", horizDist)
     end
 
-    if dist > 12 then
+    -- Stuck detection (only when far)
+    if horizDist > 12 then
         if (HRP.Position - LastPos).Magnitude < 0.5 then
             if not StuckStart then StuckStart = tick() end
             if tick() - StuckStart > STUCK_TIME_LIMIT then
                 BadCoins[target] = tick()
                 StuckStart = nil
-                WalkPath = nil
                 StatusLbl.Text = "Stuck, skipping coin"
                 return
             end
@@ -911,54 +919,37 @@ local function HandlePickingGun(dt)
     end
     if mHRP and (mHRP.Position - HRP.Position).Magnitude < FLEE_DIST then
         GunPickupTarget = nil; FarmState = "Farming"
-        StatusLbl.Text = "Murderer close, skipping gun"
+        StatusLbl.Text = "Murderer close, skip gun"
         return
     end
 
-    Hum.PlatformStand = false
-    Hum.WalkSpeed = WALK_SPEED
-    Hum.JumpPower = 0
-    Hum.JumpHeight = 0
+    Hum.PlatformStand = true
     workspace.Gravity = 0
     ApplyNoclip()
 
-    local dist = (handle.Position - HRP.Position).Magnitude
-    if dist > 25 then
-        if not WalkPath or (tick() - LastTargetRefresh > 2) then
-            LastTargetRefresh = tick()
-            WalkPath = PathfindingService:CreatePath({
-                AgentHeight = 5, AgentRadius = 2, AgentCanJump = false, WaypointSpacing = 4
-            })
-            local ok = pcall(function() WalkPath:ComputeAsync(HRP.Position, handle.Position) end)
-            if not ok or WalkPath.Status ~= Enum.PathStatus.Success then WalkPath = nil end
-            WalkIndex = 1
-        end
-        if WalkPath then
-            local wps = WalkPath:GetWaypoints()
-            if WalkIndex <= #wps then
-                local wp = wps[WalkIndex]
-                if (HRP.Position - wp.Position).Magnitude < 3 then
-                    WalkIndex = WalkIndex + 1
-                    wp = wps[math.min(WalkIndex, #wps)]
-                end
-                Hum:MoveTo(wp.Position)
-                if math.abs(HRP.Position.Y - wp.Position.Y) > 2 then
-                    HRP.CFrame = CFrame.new(HRP.Position.X, wp.Position.Y + 1, HRP.Position.Z)
-                end
-            end
-        else
-            Hum:MoveTo(handle.Position)
-        end
-    else
-        Hum:MoveTo(handle.Position)
-        if math.abs(HRP.Position.Y - handle.Position.Y) > 2 then
-            HRP.CFrame = CFrame.new(HRP.Position.X, handle.Position.Y + 2, HRP.Position.Z)
+    -- Y failsafe
+    if MapCenter and HRP.Position.Y > MapCenter.Y + Y_HARD_CAP then
+        HRP.CFrame = CFrame.new(HRP.Position.X, MapCenter.Y + 5, HRP.Position.Z)
+        HRP.Velocity = Vector3.zero
+        return
+    end
+
+    local yDiff = handle.Position.Y - HRP.Position.Y
+    if yDiff > 2 and yDiff <= MAX_COIN_ABOVE then
+        local maxStep = math.min(yDiff - 1, Y_CLIMB_RATE * dt)
+        if maxStep > 0.01 then
+            HRP.CFrame = HRP.CFrame + Vector3.new(0, maxStep, 0)
         end
     end
-    StatusLbl.Text = string.format("Getting gun: %.0f", dist)
-end
 
--- ===================== MAIN LOOP =====================
+    local horizDist = WalkTowardsXZ(HRP, handle.Position, dt, WALK_SPEED)
+
+    if horizDist < 3 then
+        HRP.CFrame = CFrame.new(handle.Position.X, HRP.Position.Y, handle.Position.Z)
+    end
+
+    StatusLbl.Text = string.format("Getting gun: %.0f", horizDist)
+end
 
 RunService.RenderStepped:Connect(function(dt)
     UpdateCache()
@@ -990,22 +981,18 @@ RunService.RenderStepped:Connect(function(dt)
     if not Settings.AutoFarm then return end
     if not HRP then return end
 
+    -- Global position failsafe
     if tick() - LastFailsafe > 3 then
         LastFailsafe = tick()
         if MapCenter and (HRP.Position - MapCenter).Magnitude > FAILSAFE_DIST then
-            HRP.CFrame = CFrame.new(MapCenter + Vector3.new(0, 20, 0))
+            HRP.CFrame = CFrame.new(MapCenter + Vector3.new(0, 10, 0))
             HRP.Velocity = Vector3.zero
-            StatusLbl.Text = "Failsafe teleport!"
-            return
-        end
-        if not MapCenter and HRP.Position.Y < -200 then
-            HRP.CFrame = CFrame.new(HRP.Position.X, 50, HRP.Position.Z)
-            HRP.Velocity = Vector3.zero
-            StatusLbl.Text = "Failsafe void rescue!"
+            StatusLbl.Text = "Position failsafe!"
             return
         end
     end
 
+    -- Void rescue (teleport, not fly)
     if HRP.Position.Y < VOID_Y then
         local safeY = (MapCenter and MapCenter.Y or 5) + 10
         HRP.CFrame = CFrame.new(HRP.Position.X, safeY, HRP.Position.Z)
