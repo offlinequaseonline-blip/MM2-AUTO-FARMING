@@ -722,4 +722,408 @@ Instance.new("UICorner", SpeedTrack).CornerRadius = UDim.new(0, 5)
 
 local SpeedFill = Instance.new("Frame")
 SpeedFill.Size = UDim2.new(1, 0, 1, 0)
-SpeedFill.BackgroundColor3 = Color3.fromRGB(0, 
+SpeedFill.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+SpeedFill.BorderSizePixel = 0
+SpeedFill.Parent = SpeedTrack
+Instance.new("UICorner", SpeedFill).CornerRadius = UDim.new(0, 5)
+
+local SpeedKnob = Instance.new("Frame")
+SpeedKnob.Size = UDim2.new(0, 18, 0, 18)
+SpeedKnob.AnchorPoint = Vector2.new(0.5, 0.5)
+SpeedKnob.Position = UDim2.new(1, 0, 0.5, 0)
+SpeedKnob.BackgroundColor3 = Color3.new(1, 1, 1)
+SpeedKnob.BorderSizePixel = 0
+SpeedKnob.Parent = SpeedTrack
+Instance.new("UICorner", SpeedKnob).CornerRadius = UDim.new(1, 0)
+
+local Sliding = false
+local function UpdateSliderVisual()
+    local Pct = math.clamp(Settings.MaxSpeed / 100, 0, 1)
+    SpeedFill.Size = UDim2.new(Pct, 0, 1, 0)
+    SpeedKnob.Position = UDim2.new(Pct, 0, 0.5, 0)
+    SpeedLabel.Text = "Speed: " .. math.floor(Settings.MaxSpeed)
+end
+local function SetSpeedFromX(X)
+    local Pct = math.clamp((X - SpeedTrack.AbsolutePosition.X) / SpeedTrack.AbsoluteSize.X, 0, 1)
+    Settings.MaxSpeed = math.max(1, math.floor(Pct * 100))
+    UpdateSliderVisual()
+end
+SpeedTrack.InputBegan:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        Sliding = true; SetSpeedFromX(Input.Position.X)
+    end
+end)
+UserInputService.InputEnded:Connect(function(Input)
+    if Input.UserInputType == Enum.UserInputType.MouseButton1 or Input.UserInputType == Enum.UserInputType.Touch then
+        if Sliding then Sliding = false; SaveConfig() end
+    end
+end)
+UserInputService.InputChanged:Connect(function(Input)
+    if Sliding and (Input.UserInputType == Enum.UserInputType.MouseMovement or Input.UserInputType == Enum.UserInputType.Touch) then
+        SetSpeedFromX(Input.Position.X)
+    end
+end)
+UpdateSliderVisual()
+
+local ModeLabel = MakeLabel("Mode: Fly", 198, Color3.fromRGB(0, 255, 180))
+
+local ModeFrame = Instance.new("Frame")
+ModeFrame.Size = UDim2.new(1, -24, 0, 28)
+ModeFrame.Position = UDim2.new(0, 12, 0, 220)
+ModeFrame.BackgroundTransparency = 1
+ModeFrame.Parent = MainFrame
+
+local function MakeModeButton(Text, Index)
+    local Button = Instance.new("TextButton")
+    Button.Size = UDim2.new(1/3, -3, 1, 0)
+    Button.Position = UDim2.new(Index/3, Index * 3, 0, 0)
+    Button.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+    Button.Text = Text
+    Button.TextColor3 = Color3.new(1, 1, 1)
+    Button.Font = Enum.Font.GothamBold
+    Button.TextSize = 12
+    Button.Parent = ModeFrame
+    Instance.new("UICorner", Button).CornerRadius = UDim.new(0, 5)
+    return Button
+end
+
+local FlyButton = MakeModeButton("Fly", 0)
+local TPButton = MakeModeButton("TP", 1)
+local WalkButton = MakeModeButton("Walk", 2)
+
+local AutoFarmButton = Instance.new("TextButton")
+AutoFarmButton.Size = UDim2.new(1, -24, 0, 36)
+AutoFarmButton.Position = UDim2.new(0, 12, 0, 260)
+AutoFarmButton.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+AutoFarmButton.Text = "START AUTO FARM"
+AutoFarmButton.TextColor3 = Color3.new(1, 1, 1)
+AutoFarmButton.Font = Enum.Font.GothamBold
+AutoFarmButton.TextSize = 14
+AutoFarmButton.Parent = MainFrame
+Instance.new("UICorner", AutoFarmButton).CornerRadius = UDim.new(0, 6)
+
+local ESPCoinButton = Instance.new("TextButton")
+ESPCoinButton.Size = UDim2.new(0.5, -15, 0, 30)
+ESPCoinButton.Position = UDim2.new(0, 12, 0, 306)
+ESPCoinButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ESPCoinButton.Text = "ESP COINS: OFF"
+ESPCoinButton.TextColor3 = Color3.new(1, 1, 1)
+ESPCoinButton.Font = Enum.Font.Gotham
+ESPCoinButton.TextSize = 11
+ESPCoinButton.Parent = MainFrame
+Instance.new("UICorner", ESPCoinButton).CornerRadius = UDim.new(0, 5)
+
+local ESPPlayerButton = Instance.new("TextButton")
+ESPPlayerButton.Size = UDim2.new(0.5, -15, 0, 30)
+ESPPlayerButton.Position = UDim2.new(0.5, 3, 0, 306)
+ESPPlayerButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ESPPlayerButton.Text = "ESP ROLES: OFF"
+ESPPlayerButton.TextColor3 = Color3.new(1, 1, 1)
+ESPPlayerButton.Font = Enum.Font.Gotham
+ESPPlayerButton.TextSize = 11
+ESPPlayerButton.Parent = MainFrame
+Instance.new("UICorner", ESPPlayerButton).CornerRadius = UDim.new(0, 5)
+
+local ESPGunButton = Instance.new("TextButton")
+ESPGunButton.Size = UDim2.new(1, -24, 0, 30)
+ESPGunButton.Position = UDim2.new(0, 12, 0, 346)
+ESPGunButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ESPGunButton.Text = "ESP DROPPED GUN: OFF"
+ESPGunButton.TextColor3 = Color3.new(1, 1, 1)
+ESPGunButton.Font = Enum.Font.Gotham
+ESPGunButton.TextSize = 11
+ESPGunButton.Parent = MainFrame
+Instance.new("UICorner", ESPGunButton).CornerRadius = UDim.new(0, 5)
+
+local ServerHopButton = Instance.new("TextButton")
+ServerHopButton.Size = UDim2.new(1, -24, 0, 30)
+ServerHopButton.Position = UDim2.new(0, 12, 0, 386)
+ServerHopButton.BackgroundColor3 = Color3.fromRGB(45, 50, 70)
+ServerHopButton.Text = "SERVER HOP"
+ServerHopButton.TextColor3 = Color3.new(1, 1, 1)
+ServerHopButton.Font = Enum.Font.GothamBold
+ServerHopButton.TextSize = 12
+ServerHopButton.Parent = MainFrame
+Instance.new("UICorner", ServerHopButton).CornerRadius = UDim.new(0, 5)
+
+local StatusLabel = MakeLabel("Waiting...", 428, Color3.fromRGB(150, 160, 190))
+
+local function SetModeVisual(Mode)
+    local Sel, Nor = Color3.fromRGB(0, 120, 255), Color3.fromRGB(45, 50, 70)
+    FlyButton.BackgroundColor3 = (Mode == "Fly") and Sel or Nor
+    TPButton.BackgroundColor3 = (Mode == "TP") and Sel or Nor
+    WalkButton.BackgroundColor3 = (Mode == "Walk") and Sel or Nor
+    ModeLabel.Text = "Mode: " .. Mode
+end
+
+local function SetMode(Mode)
+    Settings.Mode = Mode
+    SetModeVisual(Mode)
+    if Settings.AutoFarm then
+        local Hum = GetHumanoid()
+        if Mode == "Walk" then
+            if Hum then Hum.PlatformStand = false; Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 50) end
+            workspace.Gravity = 196.2
+            SetNoclip(false)
+        else
+            if Hum then Hum.PlatformStand = true end
+            workspace.Gravity = 0
+            SetNoclip(true)
+        end
+    end
+    SaveConfig()
+end
+
+local function StartAutoFarm()
+    Settings.AutoFarm = true
+    AutoFarmButton.Text = "STOP AUTO FARM"
+    AutoFarmButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    StatusLabel.Text = "Farm active: " .. Settings.Mode
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+    SetMode(Settings.Mode)
+    SaveConfig()
+end
+
+local function StopAutoFarm()
+    Settings.AutoFarm = false
+    AutoFarmButton.Text = "START AUTO FARM"
+    AutoFarmButton.BackgroundColor3 = Color3.fromRGB(0, 160, 80)
+    StatusLabel.Text = "Farm stopped"
+    StatusLabel.TextColor3 = Color3.fromRGB(150, 160, 190)
+    local Hum = GetHumanoid()
+    if Hum then Hum.PlatformStand = false; Hum.WalkSpeed = 16 end
+    workspace.Gravity = 196.2
+    SetNoclip(false)
+    WalkPath = nil
+    SaveConfig()
+end
+
+AutoFarmButton.MouseButton1Click:Connect(function()
+    if Settings.AutoFarm then StopAutoFarm() else StartAutoFarm() end
+end)
+
+ESPCoinButton.MouseButton1Click:Connect(function()
+    Settings.ESPCoins = not Settings.ESPCoins
+    ESPCoinButton.Text = "ESP COINS: " .. (Settings.ESPCoins and "ON" or "OFF")
+    if not Settings.ESPCoins then ClearCoinESP() end
+    SaveConfig()
+end)
+
+ESPPlayerButton.MouseButton1Click:Connect(function()
+    Settings.ESPPlayers = not Settings.ESPPlayers
+    ESPPlayerButton.Text = "ESP ROLES: " .. (Settings.ESPPlayers and "ON" or "OFF")
+    if not Settings.ESPPlayers then ClearPlayerESP() end
+    SaveConfig()
+end)
+
+ESPGunButton.MouseButton1Click:Connect(function()
+    Settings.ESPGun = not Settings.ESPGun
+    ESPGunButton.Text = "ESP DROPPED GUN: " .. (Settings.ESPGun and "ON" or "OFF")
+    if not Settings.ESPGun then ClearGunESP() end
+    SaveConfig()
+end)
+
+ServerHopButton.MouseButton1Click:Connect(ServerHop)
+FlyButton.MouseButton1Click:Connect(function() SetMode("Fly") end)
+TPButton.MouseButton1Click:Connect(function() SetMode("TP") end)
+WalkButton.MouseButton1Click:Connect(function() SetMode("Walk") end)
+
+SetMode(Settings.Mode)
+if Settings.ESPCoins then ESPCoinButton.Text = "ESP COINS: ON" end
+if Settings.ESPPlayers then ESPPlayerButton.Text = "ESP ROLES: ON" end
+if Settings.ESPGun then ESPGunButton.Text = "ESP DROPPED GUN: ON" end
+if Settings.AutoFarm then StartAutoFarm() end
+
+RunService.RenderStepped:Connect(function(DeltaTime)
+    local Now = tick()
+
+    if Now - LastUITimerUpdate > 1 then
+        LastUITimerUpdate = Now
+        ScriptTimeLabel.Text = string.format("Script Time: %ds", math.floor(Now - getgenv().ScriptStartTime))
+        ServerTimeLabel.Text = string.format("Server Time: %ds", math.floor(Now - getgenv().ServerJoinTime))
+    end
+
+    local Char = GetCharacter()
+    local HRP = GetHRP()
+    local Hum = GetHumanoid()
+    if not Char or not HRP or not Hum then return end
+
+    if Now - LastBagCheck > 1 then
+        LastBagCheck = Now
+        local RealBag = GetBagCoins()
+        if RealBag ~= nil then
+            if LocalBagCoins > 0 and RealBag > LocalBagCoins then
+                LocalTotalCoins = LocalTotalCoins + (RealBag - LocalBagCoins)
+            end
+            LocalBagCoins = RealBag
+        end
+        BagLabel.Text = "Bag: " .. LocalBagCoins
+        TotalLabel.Text = "Total: " .. LocalTotalCoins
+
+        local RealCandy = GetCandyCount()
+        if RealCandy ~= nil then
+            if LocalCandyCoins > 0 and RealCandy > LocalCandyCoins then
+                LocalCandyCollected = LocalCandyCollected + (RealCandy - LocalCandyCoins)
+            end
+            LocalCandyCoins = RealCandy
+        end
+        CandyLabel.Text = "Candy: " .. LocalCandyCoins
+        CandyCollectedLabel.Text = "Candy Collected: " .. LocalCandyCollected
+    end
+
+    if Now - LastESPUpdate > 0.25 then
+        LastESPUpdate = Now
+        UpdateCoinESP()
+        UpdatePlayerESP()
+        UpdateGunTracking()
+    end
+
+    if not Settings.AutoFarm then return end
+    if not IsPlaying() then
+        StatusLabel.Text = "Waiting for match to start..."
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 180, 0)
+        Hum.PlatformStand = false
+        Hum.WalkSpeed = 16
+        return
+    end
+
+    if LocalBagCoins < BagFullThreshold and HasActivatedFullBagAction then
+        HasActivatedFullBagAction = false
+        HasShotMurder = false
+        HasKilledAll = false
+    end
+
+    if Now - LastNoclipApply > 0.5 and Settings.Mode ~= "Walk" then
+        LastNoclipApply = Now
+        SetNoclip(true)
+    end
+
+    StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 150)
+    local Nearest, Distance = GetNearestTarget(HRP.Position)
+    if not Nearest then
+        StatusLabel.Text = "No coins found"
+        return
+    end
+
+    local Watching = CheckSomeoneWatching()
+    local SafeDistance = Watching and MinPlayerDistance or 0
+
+    if Settings.Mode == "Fly" then
+        Hum.PlatformStand = true
+        workspace.Gravity = 0
+        if Distance > 6 then
+            local Direction = (Nearest.Position - HRP.Position).Unit
+            if Distance > SafeDistance then
+                HRP.Velocity = Vector3.zero
+                HRP.CFrame = CFrame.new(HRP.Position + Direction * Settings.MaxSpeed * DeltaTime)
+                StatusLabel.Text = string.format("Fly -> %.0f studs", Distance)
+            else
+                HRP.Velocity = Vector3.zero
+                StatusLabel.Text = "Maintaining distance..."
+            end
+        else
+            HRP.Velocity = Vector3.zero
+            local Spin = tick() * 6
+            local Bob = math.sin(tick() * 4) * 1.5
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 2 + Bob, 0)) * CFrame.Angles(0, Spin, 0)
+            StatusLabel.Text = "Collecting (Fly)..."
+        end
+
+    elseif Settings.Mode == "TP" then
+        Hum.PlatformStand = true
+        workspace.Gravity = 0
+        if Distance > 6 then
+            if Now - LastTPTime > TP_DELAY then
+                LastTPTime = Now
+                local Offset = Vector3.new(math.random(-2, 2), math.random(0, 3), math.random(-2, 2))
+                HRP.Velocity = Vector3.zero
+                HRP.CFrame = CFrame.new(Nearest.Position + Offset)
+            end
+            StatusLabel.Text = string.format("TP -> %.0f studs (%.2fs)", Distance, TP_DELAY)
+        else
+            HRP.Velocity = Vector3.zero
+            StatusLabel.Text = "Collecting (TP)..."
+        end
+
+    elseif Settings.Mode == "Walk" then
+        Hum.PlatformStand = false
+        Hum.WalkSpeed = math.clamp(Settings.MaxSpeed, 25, 50)
+        workspace.Gravity = 196.2
+
+        if HRP.Position.Y < -50 then
+            HRP.CFrame = CFrame.new(Nearest.Position + Vector3.new(0, 5, 0))
+            StatusLabel.Text = "Void detected, teleporting back!"
+            return
+        end
+
+        local Murder
+        for _, P in ipairs(Players:GetPlayers()) do
+            if P ~= LocalPlayer and GetPlayerRole(P) == "Murderer" then Murder = P; break end
+        end
+        if Murder and Murder.Character then
+            local MurderHRP = Murder.Character:FindFirstChild("HumanoidRootPart")
+            if MurderHRP and (MurderHRP.Position - HRP.Position).Magnitude < 50 then
+                local FleeDir = (HRP.Position - MurderHRP.Position).Unit
+                HRP.CFrame = HRP.CFrame + FleeDir * 50 * DeltaTime
+                StatusLabel.Text = "Fleeing from Murderer!"
+                return
+            end
+        end
+
+        if Distance > 25 then
+            if not WalkPath or (Now - LastTargetRefresh > 2) then
+                LastTargetRefresh = Now
+                WalkPath = PathfindingService:CreatePath({AgentHeight = 5, AgentRadius = 2, AgentCanJump = true, WaypointSpacing = 4})
+                local Success = pcall(function() WalkPath:ComputeAsync(HRP.Position, Nearest.Position) end)
+                if not Success or WalkPath.Status ~= Enum.PathStatus.Success then WalkPath = nil end
+                WalkIndex = 1
+            end
+            if WalkPath then
+                local Waypoints = WalkPath:GetWaypoints()
+                if WalkIndex <= #Waypoints then
+                    local Waypoint = Waypoints[WalkIndex]
+                    if (HRP.Position - Waypoint.Position).Magnitude < 3 then
+                        WalkIndex = WalkIndex + 1
+                        Waypoint = Waypoints[math.min(WalkIndex, #Waypoints)]
+                    end
+                    Hum:MoveTo(Waypoint.Position)
+                    if Waypoint.Action == Enum.PathWaypointAction.Jump then Hum.Jump = true end
+                end
+            else
+                Hum:MoveTo(Nearest.Position)
+                if Nearest.Position.Y - HRP.Position.Y > 3 then Hum.Jump = true end
+            end
+        else
+            Hum:MoveTo(Nearest.Position)
+            if Nearest.Position.Y - HRP.Position.Y > 3 then Hum.Jump = true end
+        end
+        StatusLabel.Text = string.format("Walk -> %.0f studs", Distance)
+
+        if (HRP.Position - LastPos).Magnitude < 0.5 then
+            if Now - LastPosTime > 1.5 then
+                Hum.Jump = true
+                LastPosTime = Now
+            end
+        else
+            LastPos = HRP.Position
+            LastPosTime = Now
+        end
+    end
+
+    if LocalBagCoins >= BagFullThreshold and not HasActivatedFullBagAction then
+        HasActivatedFullBagAction = true
+        FullBagActionTime = Now
+        local Role = GetPlayerRole(LocalPlayer)
+        if Role == "Murderer" then KillAllPlayers()
+        elseif Role == "Sheriff" or Role == "Hero" then ShootMurderer() end
+    end
+
+    if HasActivatedFullBagAction and not HasShotMurder and not HasKilledAll then
+        local Role = GetPlayerRole(LocalPlayer)
+        if Role == "Innocent" then
+            local Gun = GetMyTool("gun")
+            if Gun then ShootMurderer()
+            elseif Now - FullBagActionTime > FlingDelay then FlingMurderer() end
+        end
+    end
+end)
